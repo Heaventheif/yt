@@ -126,6 +126,18 @@ class ApiTest(unittest.TestCase):
         self.assertEqual(j["url"], self.src)
         self.assertEqual(j["ext"], "mp4")
 
+    def test_link_uses_short_lived_response_cache(self):
+        import app
+        app._link_cache.clear()
+        path = f"/link?url={self.src}&type=video&q=360"
+        first = self.get(path)
+        second = self.get(path)
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(first.headers["X-Link-Cache"], "MISS")
+        self.assertEqual(second.status_code, 200)
+        self.assertEqual(second.headers["X-Link-Cache"], "HIT")
+        self.assertEqual(first.json, second.json)
+
     def test_link_audio_missing(self):
         r = self.get(f"/link?url={self.src}&type=audio")
         self.assertEqual(r.status_code, 404)
