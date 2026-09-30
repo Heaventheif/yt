@@ -3,6 +3,7 @@ import re
 import threading
 import time
 from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor
 
 import requests
 import yt_dlp
@@ -12,6 +13,7 @@ from requests.utils import quote
 
 from cookies_util import COOKIE_STATS, COOKIES_PATH
 from pages import DOCS_HTML, ENCODE_HTML, WEB_HTML
+from url_utils import normalize_url
 
 app = Flask(__name__)
 
@@ -36,6 +38,9 @@ YT_FALLBACKS = [_clients(x) for x in os.getenv("YT_FALLBACK_CLIENTS", "android_v
 SLOTS = threading.Semaphore(MAX_EXTRACT)      # استخراج المعلومات (ثقيل)
 DL_SLOTS = threading.Semaphore(MAX_DOWNLOADS)  # تنزيلات متزامنة (خفيفة)
 HITS = {}
+POOL = ThreadPoolExecutor(max_workers=12)      # فحص متوازٍ + جلب الجزء التالي مسبقا
+ORIG = {}                                      # الرابط المطبَّع => الأصلي (احتياط)
+GOOD_CLIENT = {"cl": None}                     # آخر عميل يوتيوب نجح (نبدأ به مباشرة)
 
 # جلسة HTTP مشتركة بإعادة استخدام الاتصالات
 sess = requests.Session()
@@ -62,6 +67,15 @@ def keep_alive():
 
 if SELF_URL and KEEP_ALIVE_MIN > 0:
     threading.Thread(target=keep_alive, daemon=True).start()
+
+
+def warmup():
+    """يحمّل مستخرجات yt-dlp وكاش مشغّل الجافاسكربت مرة واحدة عند الإقلاع"""
+    try:
+        with yt_dlp.YoutubeDL(ytdl_opts()) as ydl:
+            ydl.extract_info("https://www.youtube.com/watch?v=jNQXAC9IVRw", download=False)
+    except Exception:
+        pass
 
 
 class Busy(Exception):
@@ -93,7 +107,12 @@ def err(e):
 
 
 def valid_url():
-    url = request.args.get("url", "").strip()
+    raw = request.args.get("url", "").strip()
+    url = normalize_url(raw)
+    if url != raw and re.match(r"^https?://", raw):
+        if len(ORIG) > 500:
+            ORIG.clear()
+        ORIG[url] = raw
     return url if re.match(r"^https?://", url) else None
 
 
@@ -142,8 +161,12 @@ def ytdl_opts(clients=None):
          "socket_timeout": 20, "retries": 2, "js_runtimes": {"node": {}},
          "ignore_no_formats_error": True}
     cl = YT_CLIENTS if clients is None else clients
+    yt = {"skip": ["hls", "dash", "translated_subs"]}  # أقل طلبات = استخراج أسرع
     if cl:
-        o["extractor_args"] = {"youtube": {"player_client": cl}}
+        yt["player_client"] = cl
+    o["extractor_args"] = {"youtube": yt}
+    o["check_formats"] = False
+    o["extractor_retries"] = 1
     if os.path.exists(COOKIES_PATH):
         o["cookiefile"] = COOKIES_PATH
     if PROXY:
@@ -208,50 +231,63 @@ def match_fmt(info, old):
     return None
 
 
+def _probe_one(f):
+    h = dict(f.get("http_headers") or {})
+    h["Range"] = "bytes=0-1"
+    try:
+        r = sess.get(f["url"], headers=h, stream=True, timeout=(5, 8))
+        code = r.status_code
+        r.close()
+    except Exception:
+        code = 0
+    return code
+
+
 def probe(info):
-    """فحص سريع: هل يقبل المصدر طلب Range من هذا السيرفر؟ يرجع كود HTTP أو None"""
+    """فحص سريع (بالتوازي): هل يقبل المصدر طلب Range من هذا السيرفر؟ يرجع كود HTTP أو None"""
     v, a = collect_options(info)
-    cands = [get_fmt(info, o["fid"]) for o in (v[:1] + a[:1])]
+    cands = [f for f in (get_fmt(info, o["fid"]) for o in (v[:1] + a[:1])) if f]
     if not cands:
         return None
-    for f in cands:
-        h = dict(f.get("http_headers") or {})
-        h["Range"] = "bytes=0-1"
-        try:
-            r = sess.get(f["url"], headers=h, stream=True, timeout=(8, 12))
-            code = r.status_code
-            r.close()
-        except Exception:
-            code = 0
-        if code not in (200, 206):
-            return code
-    return 200
+    codes = list(POOL.map(_probe_one, cands))
+    bad = next((c for c in codes if c not in (200, 206)), None)
+    return 200 if bad is None else bad
+
+
+def is_youtube(url):
+    m = re.match(r"^https?://([^/:?#]+)", url)
+    h = (m.group(1) if m else "").lower()
+    return h == "youtu.be" or h.endswith("youtube.com") or h.endswith("youtube-nocookie.com")
 
 
 def smart_extract(url):
-    info = extract_raw(url)
-    if not info["extractor"].lower().startswith("youtube"):
-        return info
-    first_err = None
-    code = probe(info)
-    if code in (200, 206):
-        return info
-    for cl in YT_FALLBACKS:  # يوتيوب: جرّب عملاء بديلين إذا رُفضت الروابط
+    if not is_youtube(url):
+        return extract_raw(url)
+    # الترتيب: العميل الذي نجح آخر مرة، ثم الافتراضي (None)، ثم البدائل
+    order = []
+    for cl in [GOOD_CLIENT["cl"], None] + YT_FALLBACKS:
+        if cl not in order:
+            order.append(cl)
+    first_err, first_code = None, None
+    for cl in order:
         try:
-            alt = extract_raw(url, cl)
+            info = extract_raw(url, cl)
         except Busy:
             raise
         except Exception as e:
             first_err = first_err or e
             continue
-        c2 = probe(alt)
-        if c2 in (200, 206):
-            return alt
-    if code is None and first_err:
+        code = probe(info)
+        if code in (200, 206):
+            GOOD_CLIENT["cl"] = cl
+            return info
+        if first_code is None:
+            first_code = code
+    if first_code is None and first_err:
         raise first_err
-    if code is None:
+    if first_code is None:
         raise RuntimeError("لم أجد صيغ قابلة للتنزيل لهذا الرابط")
-    raise RuntimeError(f"رفض يوتيوب روابط التنزيل (HTTP {code}). حدّث الكوكيز أو جرّب لاحقا")
+    raise RuntimeError(f"رفض يوتيوب روابط التنزيل (HTTP {first_code}). حدّث الكوكيز أو جرّب لاحقا")
 
 
 _cache = OrderedDict()
@@ -294,7 +330,15 @@ def get_info(url, fresh=False):
             if c:
                 return c
         try:
-            info = smart_extract(url)
+            try:
+                info = smart_extract(url)
+            except Busy:
+                raise
+            except Exception:
+                orig = ORIG.get(url)  # إن فشل الرابط المطبَّع جرّب الأصلي مرة واحدة
+                if not orig:
+                    raise
+                info = smart_extract(orig)
         except Busy:
             raise
         except Exception as e:
@@ -359,11 +403,26 @@ def open_upstream(fmt, cstart=0, cend=None):
     return r, total, last, ranged
 
 
+def _discard(fut):
+    def _c(f):
+        try:
+            x = f.result()
+            if x is not None:
+                x.close()
+        except Exception:
+            pass
+    fut.add_done_callback(_c)
+
+
 def stream_gen(fmt, r, pos, last, ranged, slot):
-    """يمرر الملف على أجزاء (Range) مثل yt-dlp مع إعادة محاولة عند الانقطاع"""
+    """يمرر الملف على أجزاء (Range) ويفتح اتصال الجزء التالي مسبقا عند منتصف الجزء الحالي
+    فلا يحدث توقف بين الأجزاء. مع إعادة محاولة عند الانقطاع."""
     fails = 0
+    nxt = None
     try:
         while True:
+            seg_end = min(last, pos + CHUNK - 1)
+            half = pos + (seg_end - pos) // 2
             got = 0
             try:
                 for piece in r.iter_content(262144):
@@ -371,6 +430,8 @@ def stream_gen(fmt, r, pos, last, ranged, slot):
                         got += len(piece)
                         pos += len(piece)
                         yield piece
+                        if ranged and nxt is None and pos >= half and seg_end < last:
+                            nxt = POOL.submit(fetch_range, fmt, seg_end + 1, last)
             except Exception:
                 fails += 1
             finally:
@@ -381,10 +442,21 @@ def stream_gen(fmt, r, pos, last, ranged, slot):
                 fails += 1
             if fails > 3:
                 return
-            r = fetch_range(fmt, pos, last)
+            r = None
+            if nxt is not None:
+                fut, nxt = nxt, None
+                res = fut.result()
+                if pos == seg_end + 1:
+                    r = res
+                elif res is not None:
+                    res.close()
+            if r is None:
+                r = fetch_range(fmt, pos, last)
             if r is None:
                 return
     finally:
+        if nxt is not None:
+            _discard(nxt)
         try:
             r.close()
         except Exception:
@@ -607,6 +679,9 @@ def api_stream():
     except Exception as e:
         return err(e)
 
+
+if os.getenv("WARMUP", "1") == "1":
+    threading.Thread(target=warmup, daemon=True).start()
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", "10000")))

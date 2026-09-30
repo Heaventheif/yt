@@ -52,3 +52,10 @@ const buf = Buffer.from(await res.arrayBuffer());
 - ليوتيوب: يفحص التطبيق أن الروابط مقبولة، وإن رُفضت يجرب عملاء بديلين (YT_FALLBACK_CLIENTS).
 - الحدود: MAX_CONCURRENT (استخراج، افتراضي 2)، MAX_DOWNLOADS (تنزيلات متزامنة، افتراضي 6)، RATE_LIMIT_PER_MIN (افتراضي 30).
 - لتحديث yt-dlp: أعد النشر من Render (Manual Deploy → Clear build cache & deploy).
+
+## تسريع الجلب (fetch)
+- `url_utils.py`: يحوّل أي رابط (m.site.com، youtu.be، shorts، music...) إلى الصيغة القياسية ويحذف باراميترات التتبع، فيصبح لنفس الفيديو مفتاح كاش واحد. يعمل أيضا كسكريبت: `python url_utils.py "رابط"`.
+- استخراج يوتيوب يبدأ بآخر عميل نجح (GOOD_CLIENT) بدل تجربة الافتراضي الفاشل أولا.
+- فحص الروابط (probe) يتم بالتوازي، وتخطي HLS/DASH أثناء الاستخراج.
+- التنزيل يفتح اتصال الجزء التالي مسبقا (بدون توقف بين الأجزاء).
+- `WARMUP=1` (افتراضي): تسخين yt-dlp عند الإقلاع.
