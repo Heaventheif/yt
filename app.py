@@ -114,9 +114,21 @@ def encode_page():
     return Response(ENCODE_HTML, mimetype="text/html")
 
 
+def _pot_up():
+    import os
+    import socket
+    if os.getenv("ENABLE_POT", "1") != "1":
+        return None
+    try:
+        socket.create_connection(("127.0.0.1", 4416), timeout=0.3).close()
+        return True
+    except OSError:
+        return False
+
+
 @app.get("/health")
 def health():
-    return jsonify(ok=True, yt_dlp=yt_dlp.version.__version__, uptime_s=int(time.time() - STARTED),
+    return jsonify(ok=True, pot_server=_pot_up(), yt_dlp=yt_dlp.version.__version__, uptime_s=int(time.time() - STARTED),
                    active_downloads=STATS["active"], served_mb=STATS["bytes"] >> 20)
 
 

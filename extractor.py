@@ -67,10 +67,34 @@ def ytdl_opts(clients=None):
     return opts
 
 
+class _Collect:
+    """يلتقط تحذيرات/أخطاء yt-dlp (كانت مكتومة بـ no_warnings) لتظهر في السجل عند غياب الصيغ."""
+
+    def __init__(self):
+        self.msgs = []
+
+    def debug(self, m):
+        pass
+
+    info = debug
+
+    def warning(self, m):
+        if len(self.msgs) < 30:
+            self.msgs.append(str(m)[:220])
+
+    error = warning
+
+
 def _run_extract(url, clients=None):
     try:
-        with yt_dlp.YoutubeDL(ytdl_opts(clients)) as ydl:
-            return slim(ydl.extract_info(url, download=False))
+        col = _Collect()
+        opts = ytdl_opts(clients)
+        opts["logger"] = col
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = slim(ydl.extract_info(url, download=False))
+        if not info["formats"] and col.msgs:
+            log("yt-dlp returned NO formats; messages:", " | ".join(col.msgs[-6:]))
+        return info
     finally:
         _EXTRACT_QUEUE.release()
 
@@ -165,6 +189,10 @@ def _extract_youtube(url):
             first_err = first_err or e
             continue
         t1 = time.time()
+        video, audio = collect_options(info)
+        if not (video or audio):   # نتيجة بلا صيغ مباشرة ليست نجاحاً: جرّب العميل التالي
+            log(f"youtube client={name} returned no direct formats (total={len(info.get('formats', []))})")
+            continue
         code = probe(info) if PROBE_ENABLED else 200
         log(f"youtube client={name} extract={t1 - t0:.1f}s probe={time.time() - t1:.1f}s "
             f"formats={len(info.get('formats', []))} http={code}")
