@@ -1,0 +1,9 @@
+tests/
+bench/
+examples/
+*.md
+.git
+__pycache__/
+*.pyc
+cookies.txt
+.env

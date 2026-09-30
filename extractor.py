@@ -8,7 +8,7 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 import yt_dlp
 
 from config import (EXTRACT_QUEUE_MULTIPLIER, EXTRACT_WAIT_SEC, MAX_EXTRACT, PROBE_ENABLED, PROBE_TIMEOUT, PROXY,
-                    WARMUP_URL, YT_CLIENTS, YT_FALLBACKS)
+                    DISABLE_GENERIC, WARMUP_URL, YT_CLIENTS, YT_FALLBACKS)
 from cookies_util import COOKIES_PATH
 from errors import Busy
 from formats import collect_options, get_fmt
@@ -60,6 +60,8 @@ def ytdl_opts(clients=None):
             "socket_timeout": 20, "retries": 2, "js_runtimes": {"node": {}},
             "ignore_no_formats_error": True, "check_formats": False, "extractor_retries": 1,
             "extractor_args": {"youtube": yt_args}}
+    if DISABLE_GENERIC:
+        opts["allowed_extractors"] = ["default", "-generic"]
     if os.path.exists(COOKIES_PATH):
         opts["cookiefile"] = COOKIES_PATH
     if PROXY:

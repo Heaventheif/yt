@@ -9,7 +9,8 @@ import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 os.environ.update(API_KEY="k", WARMUP="0", WEB_PUBLIC="1", RATE_LIMIT_PER_MIN="4",
-                  CHUNK_MB="0.25", KEEP_ALIVE_MINUTES="0", COOKIES_B64="", CORS_ORIGIN="https://example.com")
+                  CHUNK_MB="0.25", KEEP_ALIVE_MINUTES="0", COOKIES_B64="", CORS_ORIGIN="https://example.com",
+                  ALLOW_PRIVATE_URLS="1")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 DATA = bytes((i * 31 + 7) % 256 for i in range(700_003))  # ~3 أجزاء بحجم 0.25MB

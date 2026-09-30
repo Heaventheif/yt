@@ -25,6 +25,14 @@ LINK_CACHE_SEC = max(1, int(os.getenv("LINK_CACHE_SEC", "90")))
 LINK_CACHE_MAX = max(1, int(os.getenv("LINK_CACHE_MAX", "300")))
 CHUNK = int(float(os.getenv("CHUNK_MB", "16")) * 1048576)  # حجم الجزء (Range)
 
+# حدود الأمان والتحمل المضافة من نسخة Claude
+MAX_FILE_MB = int(os.getenv("MAX_FILE_MB", "0"))
+PER_IP_STREAMS = max(0, int(os.getenv("PER_IP_STREAMS", "2")))
+ALLOWED_HOSTS = [h.strip().lower() for h in os.getenv("ALLOWED_HOSTS", "").split(",") if h.strip()]
+ALLOW_PRIVATE_URLS = os.getenv("ALLOW_PRIVATE_URLS", "0") == "1"
+DISABLE_GENERIC = os.getenv("DISABLE_GENERIC", "0") == "1"
+UPSTREAM_RETRIES = max(0, int(os.getenv("UPSTREAM_RETRIES", "2")))
+
 YT_CLIENTS = _clients(os.getenv("YT_CLIENTS", ""))
 YT_FALLBACKS = [_clients(x) for x in os.getenv("YT_FALLBACK_CLIENTS", "android_vr;tv;mweb").split(";") if x.strip()]
 

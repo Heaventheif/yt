@@ -25,6 +25,7 @@ from config import API_RATE_LIMIT
 from metrics import record, snapshot
 from serving import serve
 from url_utils import normalize_url
+from url_safety import is_public_url
 
 app = Flask(__name__)
 
@@ -77,6 +78,8 @@ def with_url(missing_msg="url مطلوب"):
             url = valid_url()
             if not url:
                 return jerr(missing_msg, 400)
+            if not is_public_url(url):
+                return jerr("الرابط غير مسموح", 400)
             try:
                 return fn(url)
             except Exception as e:
@@ -197,7 +200,7 @@ def web_dl(url):
     fid = request.args.get("fid", "")
     if not FID_PATTERN.match(fid):
         return jerr("طلب غير صحيح", 400)
-    return serve(url, fid, check=bool(request.args.get("check")))
+    return serve(url, fid, check=bool(request.args.get("check")), per_ip=True)
 
 
 # ------------------------- API بمفتاح (للبوت) -------------------------

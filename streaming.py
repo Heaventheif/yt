@@ -4,31 +4,59 @@ import re
 import threading
 from collections import namedtuple
 
-from config import CHUNK, MAX_DOWNLOADS, MAX_STREAM_FAILS, READ_SIZE, UPSTREAM_TIMEOUT
+from config import CHUNK, MAX_DOWNLOADS, MAX_STREAM_FAILS, PER_IP_STREAMS, READ_SIZE, UPSTREAM_RETRIES, UPSTREAM_TIMEOUT
 from errors import UpstreamError
 from net import POOL, sess
+from url_safety import is_public_url
 
 DL_SLOTS = threading.Semaphore(MAX_DOWNLOADS)   # تنزيلات متزامنة (خفيفة)
 Upstream = namedtuple("Upstream", "resp total last ranged")
+STATS = {"bytes": 0, "active": 0}
+_ip_active = {}
+_ip_lock = threading.Lock()
+
+
+def _ip_dec(ip):
+    if ip:
+        with _ip_lock:
+            n = _ip_active.get(ip, 0) - 1
+            if n > 0:
+                _ip_active[ip] = n
+            else:
+                _ip_active.pop(ip, None)
 
 
 class Slot:
     """خانة تنزيل تُحرَّر مرة واحدة فقط مهما تكرر استدعاء release"""
 
-    def __init__(self):
+    def __init__(self, ip=None):
         self._lock = threading.Lock()
         self._done = False
+        self._ip = ip
+        STATS["active"] += 1
 
     def release(self):
         with self._lock:
             if not self._done:
                 self._done = True
+                STATS["active"] -= 1
                 DL_SLOTS.release()
+                _ip_dec(self._ip)
 
 
-def acquire_slot():
-    """يرجع Slot أو None إن كانت كل الخانات مشغولة"""
-    return Slot() if DL_SLOTS.acquire(blocking=False) else None
+def acquire_slot(ip=None):
+    """يرجع Slot أو None عند امتلاء الخانات أو تجاوز حد IP."""
+    if ip and PER_IP_STREAMS > 0:
+        with _ip_lock:
+            if _ip_active.get(ip, 0) >= PER_IP_STREAMS:
+                return None
+            _ip_active[ip] = _ip_active.get(ip, 0) + 1
+    else:
+        ip = None
+    if not DL_SLOTS.acquire(blocking=False):
+        _ip_dec(ip)
+        return None
+    return Slot(ip)
 
 
 def _get_range(fmt, start, end):
@@ -54,10 +82,19 @@ def open_upstream(fmt, cstart=0, cend=None):
     end = cstart + CHUNK - 1
     if cend is not None:
         end = min(end, cend)
-    try:
-        r = _get_range(fmt, cstart, end)
-    except Exception as e:
-        raise RuntimeError("تعذر الاتصال بمصدر الملف: " + type(e).__name__)
+    if not is_public_url(fmt.get("url", "")):
+        raise RuntimeError("مصدر الملف غير مسموح")
+    for attempt in range(UPSTREAM_RETRIES + 1):
+        try:
+            r = _get_range(fmt, cstart, end)
+        except Exception as e:
+            if attempt >= UPSTREAM_RETRIES:
+                raise RuntimeError("تعذر الاتصال بمصدر الملف: " + type(e).__name__)
+            continue
+        if r.status_code in (429, 500, 502, 503, 504) and attempt < UPSTREAM_RETRIES:
+            r.close()
+            continue
+        break
     if r.status_code == 206:
         m = re.match(r"bytes (\d+)-(\d+)/(\d+|\*)", r.headers.get("Content-Range", ""))
         total = int(m.group(3)) if m and m.group(3).isdigit() else None
@@ -112,6 +149,7 @@ def stream_gen(fmt, r, pos, last, ranged, slot):
             try:
                 for piece in r.iter_content(READ_SIZE):
                     if piece:
+                        STATS["bytes"] += len(piece)
                         got += len(piece)
                         pos += len(piece)
                         yield piece
