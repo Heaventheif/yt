@@ -8,7 +8,7 @@ import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-os.environ.update(API_KEY="k", ALLOW_PRIVATE_URLS="1", WARMUP="0", WEB_PUBLIC="1", RATE_LIMIT_PER_MIN="4",
+os.environ.update(API_KEY="k", WARMUP="0", WEB_PUBLIC="1", RATE_LIMIT_PER_MIN="4",
                   CHUNK_MB="0.25", KEEP_ALIVE_MINUTES="0", COOKIES_B64="", CORS_ORIGIN="https://example.com")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 

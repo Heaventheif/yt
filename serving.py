@@ -4,12 +4,11 @@ import re
 from flask import Response, jsonify, request
 from requests.utils import quote
 
-from config import MAX_FILE_MB, REFRESH_CODES
+from config import REFRESH_CODES
 from errors import HttpFailure, UpstreamError
 from formats import get_fmt, match_fmt
 from info_cache import get_info
 from responses import jerr, err
-from security import client_ip
 from streaming import acquire_slot, open_upstream, stream_gen
 
 CONTENT_TYPES = {"mp4": "video/mp4", "webm": "video/webm", "m4a": "audio/mp4", "mp3": "audio/mpeg",
@@ -57,7 +56,7 @@ def _content_type(fmt):
 
 
 def _file_title(info, fmt):
-    title = re.sub(r'[\\/:*?"<>|\x00-\x1f\x7f]+', "_", info.get("title") or "file")[:80].strip(" .") or "file"
+    title = re.sub(r'[\\/:*?"<>|\r\n]+', "_", info.get("title") or "file")[:80]
     if fmt.get("height") and fmt.get("vcodec") != "none":
         title += f" [{fmt['height']}p]"
     return title
@@ -79,7 +78,7 @@ def _response_headers(info, fmt, up, cstart, cend):
     return headers, status
 
 
-def serve(url, fid, check=False, per_ip=False):
+def serve(url, fid, check=False):
     """check=True: يتحقق فقط ويرجع الحجم دون تنزيل"""
     info = get_info(url)
     fmt = get_fmt(info, fid)
@@ -87,15 +86,12 @@ def serve(url, fid, check=False, per_ip=False):
         return jerr("الصيغة غير موجودة، أعد البحث عن الرابط", 404)
     cstart, cend = (0, None) if check else _requested_range()
 
-    slot = acquire_slot(client_ip() if per_ip else None)
+    slot = acquire_slot()
     if slot is None:
         return jerr("الخادم مشغول بتنزيلات أخرى، حاول بعد قليل", 429)
     handed_off = False
     try:
         up, info, fmt = _open_with_refresh(url, info, fmt, cstart, cend)
-        if MAX_FILE_MB and up.total and up.total > MAX_FILE_MB * 1048576:
-            up.resp.close()
-            return jerr(f"حجم الملف يتجاوز الحد المسموح ({MAX_FILE_MB}MB)", 413)
         if up.last < cstart:
             up.resp.close()
             return jerr("نطاق غير صالح", 416)

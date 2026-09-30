@@ -2,24 +2,18 @@
 import threading
 import time
 from flask import request
-import hmac
-
-from config import API_KEY, MAX_TRACKED_IPS, RATE_LIMIT, RATE_WINDOW_SEC, TRUSTED_PROXY_HOPS
+from config import API_KEY, MAX_TRACKED_IPS, RATE_LIMIT, RATE_WINDOW_SEC
 
 
 def auth_ok():
     if not API_KEY:
         return True
-    supplied = request.headers.get("X-API-Key") or request.args.get("key") or ""
-    return hmac.compare_digest(supplied.encode(), API_KEY.encode())
+    return (request.headers.get("X-API-Key") or request.args.get("key")) == API_KEY
 
 
 def client_ip():
-    parts = [p.strip() for p in request.headers.get("X-Forwarded-For", "").split(",") if p.strip()]
-    if parts:
-        hops = TRUSTED_PROXY_HOPS   # 0 = السلوك القديم (أول عنوان). N>0 = من اليمين، أصعب على التزوير
-        return parts[-hops] if 0 < hops <= len(parts) else parts[0]
-    return request.remote_addr or "?"
+    xff = request.headers.get("X-Forwarded-For", "")
+    return xff.split(",")[0].strip() or request.remote_addr or "?"
 
 
 _hits = {}
