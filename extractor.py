@@ -19,8 +19,9 @@ from net import POOL, sess
 _EXTRACT_EXECUTOR = ThreadPoolExecutor(max_workers=max(1, MAX_EXTRACT), thread_name_prefix="extract")
 _EXTRACT_QUEUE = threading.BoundedSemaphore(max(1, MAX_EXTRACT) * (1 + EXTRACT_QUEUE_MULTIPLIER))
 OK_CODES = (200, 206)
-KEEP_FIELDS = ("format_id", "url", "ext", "protocol", "vcodec", "acodec", "height", "tbr", "abr",
-               "filesize", "filesize_approx", "http_headers")
+KEEP_FIELDS = ("format_id", "url", "ext", "protocol", "vcodec", "acodec", "height", "resolution",
+               "fps", "format_note", "language", "tbr", "abr", "filesize", "filesize_approx",
+               "http_headers")
 
 _last_good_client = None
 _last_good_at = 0.0
