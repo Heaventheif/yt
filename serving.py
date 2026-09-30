@@ -85,6 +85,7 @@ def _merged_response(info, video_fmt, audio_fmt, slot):
     if audio_headers:
         command += ["-headers", audio_headers]
     command += ["-i", audio_fmt["url"], "-map", "0:v:0", "-map", "1:a:0",
+                "-threads", "1", "-filter_threads", "1", "-filter_complex_threads", "1",
                 "-c:v", "copy", "-c:a", "aac", "-b:a", "128k",
                 "-movflags", "frag_keyframe+empty_moov", "-f", "mp4", "pipe:1"]
     try:

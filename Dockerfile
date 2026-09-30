@@ -20,6 +20,8 @@ RUN VER=$(pip show bgutil-ytdlp-pot-provider | awk '/^Version:/{print $2}') \
 COPY *.py start.sh ./
 RUN chmod +x start.sh
 
-ENV NODE_OPTIONS=--max-old-space-size=192
+ENV NODE_OPTIONS=--max-old-space-size=96 \
+    MALLOC_ARENA_MAX=2 \
+    PYTHONMALLOC=malloc
 
 CMD ["./start.sh"]

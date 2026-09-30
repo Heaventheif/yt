@@ -16,4 +16,10 @@ services:
       - key: WEB_PUBLIC
         value: "1"
       - key: MAX_CONCURRENT
-        value: "2"
+        value: "1"
+      - key: MAX_DOWNLOADS
+        value: "4"
+      - key: THREADS
+        value: "8"
+      - key: MAX_REQUESTS
+        value: "300"

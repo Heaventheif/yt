@@ -17,10 +17,10 @@ RATE_LIMIT = int(os.getenv("RATE_LIMIT_PER_MIN", "30"))   # حد طلبات ال
 API_RATE_LIMIT = int(os.getenv("API_RATE_LIMIT_PER_MIN", "60"))
 EXTRACT_QUEUE_MULTIPLIER = max(1, int(os.getenv("EXTRACT_QUEUE_MULTIPLIER", "4")))
 PROBE_ENABLED = os.getenv("PROBE_ON_EXTRACT", "0") == "1"
-MAX_DOWNLOADS = int(os.getenv("MAX_DOWNLOADS", "6"))      # تنزيلات متزامنة
-MAX_EXTRACT = int(os.getenv("MAX_CONCURRENT", "2"))       # استخراجات متزامنة (ثقيلة)
+MAX_DOWNLOADS = max(1, int(os.getenv("MAX_DOWNLOADS", "4")))      # تنزيلات متزامنة
+MAX_EXTRACT = max(1, int(os.getenv("MAX_CONCURRENT", "1")))       # استخراجات متزامنة (ثقيلة)
 CACHE_TTL = int(os.getenv("CACHE_TTL_SEC", "1200"))
-CACHE_MAX = int(os.getenv("CACHE_MAX", "80"))
+CACHE_MAX = max(10, int(os.getenv("CACHE_MAX", "40")))
 LINK_CACHE_SEC = max(1, int(os.getenv("LINK_CACHE_SEC", "90")))
 LINK_CACHE_MAX = max(1, int(os.getenv("LINK_CACHE_MAX", "300")))
 CHUNK = int(float(os.getenv("CHUNK_MB", "16")) * 1048576)  # حجم الجزء (Range)
@@ -50,7 +50,7 @@ ERROR_MAX_LEN = 400
 READ_SIZE = max(65536, int(os.getenv("READ_SIZE_KB", "512")) * 1024)
 UPSTREAM_TIMEOUT = (10, 30)    # (اتصال، قراءة) بالثواني
 PROBE_TIMEOUT = (5, 8)
-POOL_WORKERS = 12
+POOL_WORKERS = max(2, int(os.getenv("POOL_WORKERS", "4")))
 REFRESH_CODES = (401, 403, 404, 410)   # أكواد تعني أن رابط المصدر انتهى فنعيد الاستخراج
 MAX_STREAM_FAILS = 3
 WARMUP_URL = "https://www.youtube.com/watch?v=jNQXAC9IVRw"
