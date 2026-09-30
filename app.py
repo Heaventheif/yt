@@ -1,4 +1,5 @@
 import base64
+import json
 import os
 import re
 import threading
@@ -20,10 +21,74 @@ DL_SLOTS = threading.Semaphore(int(os.getenv("MAX_DOWNLOADS", "3")))  # تنزي
 HITS = {}
 SLOTS = threading.Semaphore(int(os.getenv("MAX_CONCURRENT", "2")))  # حماية الذاكرة 512MB
 
-# ---- cookies من متغير بيئة (base64 لملف cookies.txt بصيغة Netscape) ----
-if os.getenv("COOKIES_B64"):
-    with open(COOKIES_PATH, "wb") as f:
-        f.write(base64.b64decode(os.environ["COOKIES_B64"]))
+# ---- cookies: تحميل مرن (base64 / نص مباشر / JSON) وتحويل تلقائي لصيغة Netscape ----
+COOKIE_STATS = {"loaded": False, "cookies": 0, "domains": []}
+
+
+def _normalize_cookies(text):
+    text = text.replace("\r\n", "\n").replace("\r", "\n").strip()
+    lines = []
+    if text[:1] in ("[", "{"):  # تصدير JSON من بعض الإضافات
+        try:
+            data = json.loads(text)
+        except Exception:
+            data = []
+        if isinstance(data, dict):
+            data = data.get("cookies", [])
+        for c in data if isinstance(data, list) else []:
+            dom, name = c.get("domain", ""), c.get("name")
+            if not dom or not name:
+                continue
+            try:
+                exp = max(int(float(c.get("expirationDate") or c.get("expires") or 0)), 0)
+            except Exception:
+                exp = 0
+            lines.append("\t".join([
+                ("#HttpOnly_" if c.get("httpOnly") else "") + dom,
+                "TRUE" if dom.startswith(".") else "FALSE",
+                c.get("path", "/"),
+                "TRUE" if c.get("secure") else "FALSE",
+                str(exp), name, str(c.get("value", "")),
+            ]))
+    else:
+        for ln in text.split("\n"):
+            if not ln.strip() or (ln.startswith("#") and not ln.startswith("#HttpOnly_")):
+                continue
+            parts = ln.split("\t")
+            if len(parts) != 7:  # إذا تحولت التابات إلى مسافات
+                parts = re.split(r"\s+", ln.strip(), maxsplit=6)
+            if len(parts) == 7:
+                lines.append("\t".join(parts))
+    return lines
+
+
+def load_cookies():
+    raw = (os.getenv("COOKIES_B64") or "").strip().strip("\"'")
+    if not raw:
+        return
+    text = raw
+    lines = []
+    for _ in range(3):  # يتعامل أيضا مع base64 مزدوج
+        lines = _normalize_cookies(text)
+        if lines:
+            break
+        compact = re.sub(r"\s+", "", text)
+        compact += "=" * (-len(compact) % 4)
+        try:
+            text = base64.b64decode(compact).decode("utf-8-sig", errors="ignore")
+        except Exception:
+            break
+    if not lines:
+        print("[cookies] لم يتم العثور على أسطر كوكيز صالحة — تأكد من الملف/الترميز", flush=True)
+        return
+    with open(COOKIES_PATH, "w", encoding="utf-8") as f:
+        f.write("# Netscape HTTP Cookie File\n" + "\n".join(lines) + "\n")
+    doms = sorted({l.split("\t")[0].replace("#HttpOnly_", "").lstrip(".") for l in lines})
+    COOKIE_STATS.update(loaded=True, cookies=len(lines), domains=doms[:30])
+    print(f"[cookies] loaded {len(lines)} cookies", flush=True)
+
+
+load_cookies()
 
 
 # ---- Keep-alive: يزور السيرفر نفسه كل 14 دقيقة لمنع النوم ----
@@ -258,6 +323,67 @@ def index():
     return Response(WEB_HTML, mimetype="text/html")
 
 
+ENCODE_HTML = r"""<!doctype html>
+<html lang="ar" dir="rtl"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>تشفير الكوكيز base64</title>
+<style>
+*{box-sizing:border-box}
+body{font-family:system-ui,sans-serif;background:#0f1115;color:#eee;margin:0;padding:20px 14px;line-height:1.7}
+.w{max-width:680px;margin:0 auto}
+h1{font-size:1.35rem;text-align:center;margin:0 0 4px}
+.s{text-align:center;color:#9aa;font-size:.85rem;margin:0 0 14px}
+textarea{width:100%;height:150px;background:#1a1d24;color:#eee;border:1px solid #333;border-radius:10px;padding:10px;direction:ltr;font-family:monospace;font-size:.8rem}
+button,label.b{display:inline-block;cursor:pointer;border:0;border-radius:10px;background:#2b6cff;color:#fff;padding:11px 16px;font:inherit;margin:6px 4px 6px 0}
+button.g,label.g{background:#333}
+input[type=file]{display:none}
+#info{color:#9aa;font-size:.9rem;margin:6px 0}
+.ok{color:#6fdc8c}.bad{color:#ff7b7b}
+</style></head><body><div class="w">
+<h1>تشفير الكوكيز إلى base64</h1>
+<p class="s">التشفير يتم داخل متصفحك فقط، ولا يُرسل شيء لأي سيرفر.</p>
+<label class="b">اختر ملف cookies.txt<input type="file" id="f" accept=".txt,.json,text/plain,application/json"></label>
+<span style="color:#9aa">أو الصق محتواه:</span>
+<textarea id="src" placeholder="# Netscape HTTP Cookie File ..."></textarea>
+<label style="display:block;margin:8px 0"><input type="checkbox" id="only" checked> إبقاء كوكيز youtube.com و google.com فقط (موصى به)</label>
+<button onclick="run()">تشفير</button>
+<div id="info"></div>
+<textarea id="out" readonly placeholder="الناتج يظهر هنا — انسخه إلى COOKIES_B64 في Render"></textarea>
+<button onclick="cp()">نسخ الناتج</button>
+<button class="g" onclick="dec()">فحص: فك الترميز</button>
+<pre id="chk" style="direction:ltr;background:#1a1d24;padding:10px;border-radius:10px;white-space:pre-wrap;display:none"></pre>
+</div>
+<script>
+const $=id=>document.getElementById(id);
+function b64(str){const b=new TextEncoder().encode(str);let s='';for(let i=0;i<b.length;i+=8192)s+=String.fromCharCode.apply(null,b.subarray(i,i+8192));return btoa(s)}
+$('f').onchange=async e=>{const f=e.target.files[0];if(f){$('src').value=await f.text();run()}};
+function run(){
+  let t=$('src').value.replace(/\r\n?/g,'\n').trim();
+  if(!t){$('info').innerHTML='<span class="bad">لا يوجد محتوى</span>';return}
+  let out,n=0,yt=false,tabs=true;
+  if(t[0]==='['||t[0]==='{'){out=t;n='JSON';yt=/youtube|google/.test(t)}
+  else{
+    let ls=t.split('\n').filter(l=>l.trim()&&(!l.startsWith('#')||l.startsWith('#HttpOnly_')));
+    if($('only').checked)ls=ls.filter(l=>/(youtube|google)\.com/.test(l));
+    n=ls.length;yt=ls.some(l=>/youtube\.com/.test(l));tabs=ls.every(l=>l.split('\t').length===7);
+    out='# Netscape HTTP Cookie File\n'+ls.join('\n')+'\n';
+  }
+  if(!n){$('info').innerHTML='<span class="bad">لم أجد كوكيز مطابقة. جرّب إلغاء خيار التصفية.</span>';$('out').value='';return}
+  $('out').value=b64(out);
+  $('info').innerHTML='عدد الكوكيز: '+n+' — '+(yt?'<span class="ok">يوتيوب موجود</span>':'<span class="bad">لا توجد كوكيز يوتيوب (سجّل الدخول ثم صدّر من صفحة youtube.com)</span>')
+    +(tabs?'':' — <span class="bad">التابات مفقودة، لكن السيرفر يصلحها تلقائياً</span>')+' — الحجم: '+$('out').value.length+' حرف';
+}
+async function cp(){const v=$('out').value;if(!v)return;try{await navigator.clipboard.writeText(v)}catch(e){$('out').select();document.execCommand('copy')}$('info').innerHTML+=' — <span class="ok">تم النسخ</span>'}
+function dec(){const v=$('out').value;if(!v)return;const c=$('chk');c.style.display='block';
+  try{c.textContent=new TextDecoder().decode(Uint8Array.from(atob(v),x=>x.charCodeAt(0))).split('\n').slice(0,3).map(l=>l.replace(/\t.*\t/,'\t…\t')).join('\n')}catch(e){c.textContent='فشل الفك'}}
+</script></body></html>"""
+
+
+@app.get("/encode")
+def encode_page():
+    return Response(ENCODE_HTML, mimetype="text/html")
+
+
 def client_ip():
     xff = request.headers.get("X-Forwarded-For", "")
     return (xff.split(",")[0].strip() or request.remote_addr or "?")
@@ -280,7 +406,7 @@ def rate_ok():
 @app.before_request
 def guard():
     p = request.path
-    if p in ("/", "/health", "/docs"):
+    if p in ("/", "/health", "/docs", "/encode"):
         return None
     if p.startswith("/web/"):
         if not WEB_PUBLIC:
@@ -295,6 +421,13 @@ def guard():
 @app.get("/health")
 def health():
     return jsonify(ok=True, yt_dlp=yt_dlp.version.__version__)
+
+
+@app.get("/cookies")
+def cookies_status():
+    """حالة الكوكيز (بدون قيم) — تحتاج المفتاح"""
+    yt = any(d.endswith(("youtube.com", "google.com")) for d in COOKIE_STATS["domains"])
+    return jsonify(ok=True, has_youtube=yt, **COOKIE_STATS)
 
 
 @app.get("/info")
