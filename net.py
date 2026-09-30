@@ -8,7 +8,7 @@ from config import POOL_WORKERS, PROXY
 
 sess = requests.Session()
 sess.trust_env = False
-_adapter = HTTPAdapter(pool_connections=20, pool_maxsize=64, max_retries=0)
+_adapter = HTTPAdapter(pool_connections=20, pool_maxsize=64, max_retries=0, pool_block=True)
 sess.mount("https://", _adapter)
 sess.mount("http://", _adapter)
 if PROXY:

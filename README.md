@@ -85,3 +85,9 @@ const buf = Buffer.from(await res.arrayBuffer());
 python -m unittest discover -s tests -v
 ```
 تعمل بدون إنترنت: سيرفر ملفات محلي يحاكي المصدر (Range، وانتهاء الرابط 403).
+
+### تحسينات التحمل والأداء
+
+الإصدار الحالي يستخدم طابورًا محدودًا لاستخراج `yt-dlp`، وsingle-flight بحيث الطلبات المتزامنة لنفس الرابط تشترك في عملية استخراج واحدة، وحدًا مستقلاً لطلبات `/info` و`/link` و`/stream`. كما أن فحص `probe` معطّل افتراضيًا لتقليل طلبات الشبكة، ويمكن تفعيله عبر `PROBE_ON_EXTRACT=1` عند الحاجة.
+
+إعدادات إضافية: `API_RATE_LIMIT_PER_MIN`، `EXTRACT_QUEUE_MULTIPLIER`، `EXTRACT_WAIT_SEC`، `PROBE_ON_EXTRACT`، `WORKERS`، و`THREADS`.

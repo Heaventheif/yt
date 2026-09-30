@@ -1,7 +1,8 @@
-"""كاش نتائج الاستخراج + منع الاستخراج المكرر لنفس الرابط + تذكّر الأخطاء القصيرة."""
+"""كاش نتائج الاستخراج + single-flight حقيقي باستخدام Future."""
 import threading
 import time
 from collections import OrderedDict
+from concurrent.futures import Future
 
 from config import (CACHE_MAX, CACHE_TTL, ERROR_CACHE_SEC, MAX_CACHED_ERRORS,
                     MAX_REMEMBERED_ORIGINALS)
@@ -10,8 +11,6 @@ from extractor import smart_extract
 
 
 class TTLCache:
-    """LRU بسيط بمدة صلاحية، آمن للخيوط"""
-
     def __init__(self, ttl, max_items):
         self._ttl, self._max = ttl, max_items
         self._items = OrderedDict()
@@ -35,16 +34,17 @@ class TTLCache:
 
 
 _cache = TTLCache(CACHE_TTL, CACHE_MAX)
-_errors = {}      # url -> (وقت، رسالة)
-_inflight = {}    # url -> قفل: الطلبات المتزامنة لنفس الرابط تنتظر استخراجا واحدا
-_originals = {}   # الرابط المطبَّع -> الرابط الأصلي (احتياط إن فشل المطبَّع)
+_errors = {}
+_inflight = {}  # url -> Future: كل الطلبات لنفس الرابط تشترك في استخراج واحد
+_originals = {}
 _lock = threading.Lock()
 
 
 def remember_original(normalized, original):
-    if len(_originals) > MAX_REMEMBERED_ORIGINALS:
-        _originals.clear()
-    _originals[normalized] = original
+    with _lock:
+        if len(_originals) >= MAX_REMEMBERED_ORIGINALS:
+            _originals.clear()
+        _originals[normalized] = original
 
 
 def _extract(url):
@@ -53,47 +53,77 @@ def _extract(url):
     except Busy:
         raise
     except Exception:
-        original = _originals.get(url)  # إن فشل الرابط المطبَّع جرّب الأصلي مرة واحدة
+        with _lock:
+            original = _originals.get(url)
         if not original:
             raise
         return smart_extract(original)
 
 
 def _raise_recent_error(url):
-    e = _errors.get(url)
+    with _lock:
+        e = _errors.get(url)
     if e and time.time() - e[0] < ERROR_CACHE_SEC:
         raise RuntimeError(e[1])
 
 
 def _record_error(url, e):
-    if len(_errors) > MAX_CACHED_ERRORS:
-        _errors.clear()
-    _errors[url] = (time.time(), clean_message(e))
+    with _lock:
+        if len(_errors) >= MAX_CACHED_ERRORS:
+            _errors.clear()
+        _errors[url] = (time.time(), clean_message(e))
+
+
+def _run_and_cache(url):
+    try:
+        info = _extract(url)
+        _cache.put(url, info)
+        with _lock:
+            _errors.pop(url, None)
+        return info
+    except Busy:
+        raise
+    except Exception as e:
+        _record_error(url, e)
+        raise
 
 
 def get_info(url, fresh=False):
+    # fast path: الطلب العادي يستفيد من الكاش قبل إنشاء Future.
     if not fresh:
         cached = _cache.get(url)
         if cached:
             return cached
         _raise_recent_error(url)
+
+    # ننشئ/نلتقط Future واحدة لكل URL. هذا يمنع تشغيل yt-dlp عدة مرات
+    # لنفس الرابط عند وصول طلبات متزامنة.
     with _lock:
-        url_lock = _inflight.setdefault(url, threading.Lock())
-    with url_lock:
-        if not fresh:
-            cached = _cache.get(url)
-            if cached:
-                return cached
+        future = _inflight.get(url)
+        if future is None:
+            future = Future()
+            _inflight[url] = future
+            owner = True
+        else:
+            owner = False
+
+    if owner:
         try:
-            info = _extract(url)
-        except Busy:
-            raise
-        except Exception as e:
-            _record_error(url, e)
-            raise
+            # double-check مهم: قد يكون طلب آخر أنهى الاستخراج وملأ الكاش
+            # قبل أن يصل هذا المالك إلى هنا. عندها لا نعيد الاستخراج بلا داع.
+            # الطلب العادي فقط يعيد استخدام نتيجة ظهرت بعد الـ fast path.
+            # fresh يتجاهل الكاش القديم عمداً.
+            cached = _cache.get(url) if not fresh else None
+            if cached:
+                future.set_result(cached)
+            else:
+                future.set_result(_run_and_cache(url))
+        except BaseException as e:
+            future.set_exception(e)
         finally:
             with _lock:
-                _inflight.pop(url, None)
-        _errors.pop(url, None)
-        _cache.put(url, info)
-        return info
+                if _inflight.get(url) is future:
+                    _inflight.pop(url, None)
+
+    # fresh يتجاهل الكاش القديم، لكنه لا يتجاوز extraction جاريا بالفعل.
+    return future.result()

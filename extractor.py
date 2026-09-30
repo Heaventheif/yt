@@ -1,42 +1,46 @@
-"""الاستخراج عبر yt-dlp: الخيارات، الفحص، واختيار عميل يوتيوب المناسب."""
+"""الاستخراج عبر yt-dlp مع طابور محدود يمنع إغراق الخادم."""
 import os
 import re
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 
 import yt_dlp
 
-from config import (EXTRACT_WAIT_SEC, MAX_EXTRACT, PROBE_TIMEOUT, PROXY, WARMUP_URL,
-                    YT_CLIENTS, YT_FALLBACKS)
+from config import (EXTRACT_QUEUE_MULTIPLIER, EXTRACT_WAIT_SEC, MAX_EXTRACT, PROBE_ENABLED, PROBE_TIMEOUT, PROXY,
+                    WARMUP_URL, YT_CLIENTS, YT_FALLBACKS)
 from cookies_util import COOKIES_PATH
 from errors import Busy
 from formats import collect_options, get_fmt
 from net import POOL, sess
 
 
-EXTRACT_SLOTS = threading.Semaphore(MAX_EXTRACT)   # الاستخراج ثقيل فنحدّد تزامنه
+# لا ننشئ yt-dlp بلا حدود عند الضغط. عدد مهام الاستخراج الفعلية يبقى محدوداً.
+_EXTRACT_EXECUTOR = ThreadPoolExecutor(max_workers=max(1, MAX_EXTRACT), thread_name_prefix="extract")
+_EXTRACT_QUEUE = threading.BoundedSemaphore(max(1, MAX_EXTRACT) * (1 + EXTRACT_QUEUE_MULTIPLIER))
 OK_CODES = (200, 206)
 KEEP_FIELDS = ("format_id", "url", "ext", "protocol", "vcodec", "acodec", "height", "tbr", "abr",
                "filesize", "filesize_approx", "http_headers")
 
-_last_good_client = None   # آخر عميل يوتيوب نجح: نبدأ به مباشرة في الطلب التالي
+_last_good_client = None
+_last_good_at = 0.0
+_CLIENT_TTL = 900
 
 
 def log(*args):
     print("[timing]", *args, flush=True)
 
 
-# ------------------------- تقليص النتيجة -------------------------
 def _slim_format(f):
     return {k: f.get(k) for k in KEEP_FIELDS}
 
 
 def slim(d):
-    """يحتفظ بالحقول اللازمة فقط لتوفير الذاكرة"""
+    """يحتفظ بالحقول اللازمة فقط لتوفير الذاكرة."""
     if d.get("_type") == "playlist" and d.get("entries"):
         d = next((e for e in d["entries"] if e), d)
     fmts = [_slim_format(f) for f in (d.get("formats") or []) if f.get("url")]
-    if not fmts and d.get("url"):  # رابط مباشر بلا قائمة صيغ
+    if not fmts and d.get("url"):
         fmts = [_slim_format({**d, "format_id": "0", "ext": d.get("ext") or "mp4",
                               "protocol": d.get("protocol") or "https"})]
     return {"title": d.get("title"), "uploader": d.get("uploader") or d.get("channel"),
@@ -44,9 +48,8 @@ def slim(d):
             "extractor": str(d.get("extractor_key") or ""), "formats": fmts}
 
 
-# ------------------------- yt-dlp -------------------------
 def ytdl_opts(clients=None):
-    yt_args = {"skip": ["hls", "dash", "translated_subs"]}  # أقل طلبات = استخراج أسرع
+    yt_args = {"skip": ["hls", "dash", "translated_subs"]}
     player_clients = YT_CLIENTS if clients is None else clients
     if player_clients:
         yt_args["player_client"] = player_clients
@@ -61,18 +64,44 @@ def ytdl_opts(clients=None):
     return opts
 
 
-def extract_raw(url, clients=None):
-    if not EXTRACT_SLOTS.acquire(timeout=EXTRACT_WAIT_SEC):
-        raise Busy("الخادم مشغول بطلبات أخرى، حاول بعد قليل")
+def _run_extract(url, clients=None):
     try:
         with yt_dlp.YoutubeDL(ytdl_opts(clients)) as ydl:
             return slim(ydl.extract_info(url, download=False))
     finally:
-        EXTRACT_SLOTS.release()
+        _EXTRACT_QUEUE.release()
+
+
+def extract_raw(url, clients=None):
+    """يضع مهمة yt-dlp في طابور محدود وينتظر النتيجة بمهلة واضحة.
+
+    إذا انتهت مهلة انتظار النتيجة، نحاول إلغاء المهمة إن لم تكن قد بدأت بعد.
+    أما مهمة yt-dlp التي بدأت فعلا فلا يمكن قتلها بأمان من داخل ThreadPoolExecutor؛
+    تبقى محكومة بمهلات yt-dlp، مع بقاء عددها الأقصى محدودا بـ MAX_EXTRACT.
+    """
+    if not _EXTRACT_QUEUE.acquire(timeout=EXTRACT_WAIT_SEC):
+        raise Busy("الخادم مشغول بطلبات استخراج أخرى، حاول بعد قليل")
+    future = None
+    try:
+        future = _EXTRACT_EXECUTOR.submit(_run_extract, url, clients)
+        try:
+            return future.result(timeout=max(30, EXTRACT_WAIT_SEC + 30))
+        except FutureTimeout:
+            # إن لم تبدأ المهمة بعد، نلغيها ونعيد خانة الطابور يدويا لأن
+            # _run_extract لن يدخل finally في هذه الحالة. أما إن كانت بدأت،
+            # فـ _run_extract سيحرر الخانة بنفسه عند انتهائها.
+            if future.cancel():
+                _EXTRACT_QUEUE.release()
+            raise Busy("استغرق استخراج الرابط وقتا أطول من المسموح، حاول مجددا")
+    except Busy:
+        raise
+    except Exception:
+        if future is None:
+            _EXTRACT_QUEUE.release()
+        raise
 
 
 def warmup():
-    """يحمّل مستخرجات yt-dlp وكاش مشغّل الجافاسكربت مرة واحدة عند الإقلاع"""
     try:
         with yt_dlp.YoutubeDL(ytdl_opts()) as ydl:
             ydl.extract_info(WARMUP_URL, download=False)
@@ -80,7 +109,6 @@ def warmup():
         pass
 
 
-# ------------------------- فحص الروابط -------------------------
 def _probe_one(f):
     headers = dict(f.get("http_headers") or {})
     headers["Range"] = "bytes=0-1"
@@ -94,7 +122,6 @@ def _probe_one(f):
 
 
 def probe(info):
-    """فحص سريع (بالتوازي): هل يقبل المصدر طلب Range من هذا السيرفر؟ يرجع كود HTTP أو None"""
     video, audio = collect_options(info)
     candidates = [f for f in (get_fmt(info, o["fid"]) for o in (video[:1] + audio[:1])) if f]
     if not candidates:
@@ -104,7 +131,6 @@ def probe(info):
     return 200 if bad is None else bad
 
 
-# ------------------------- يوتيوب -------------------------
 def is_youtube(url):
     m = re.match(r"^https?://([^/:?#]+)", url)
     host = (m.group(1) if m else "").lower()
@@ -112,16 +138,17 @@ def is_youtube(url):
 
 
 def _client_order():
-    """العميل الذي نجح آخر مرة، ثم الافتراضي (None)، ثم البدائل"""
+    now = time.time()
+    recent = _last_good_client if _last_good_client is not None and now - _last_good_at < _CLIENT_TTL else None
     order = []
-    for cl in [_last_good_client, None] + YT_FALLBACKS:
+    for cl in [recent, None] + YT_FALLBACKS:
         if cl not in order:
             order.append(cl)
     return order
 
 
 def _extract_youtube(url):
-    global _last_good_client
+    global _last_good_client, _last_good_at
     first_err, first_code = None, None
     for cl in _client_order():
         name = ",".join(cl) if cl else "default"
@@ -135,11 +162,12 @@ def _extract_youtube(url):
             first_err = first_err or e
             continue
         t1 = time.time()
-        code = probe(info)
+        code = probe(info) if PROBE_ENABLED else 200
         log(f"youtube client={name} extract={t1 - t0:.1f}s probe={time.time() - t1:.1f}s "
             f"formats={len(info.get('formats', []))} http={code}")
         if code in OK_CODES:
             _last_good_client = cl
+            _last_good_at = time.time()
             return info
         if first_code is None:
             first_code = code

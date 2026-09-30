@@ -17,6 +17,7 @@ from info_cache import get_info, remember_original
 from pages import DOCS_HTML, ENCODE_HTML, WEB_HTML
 from responses import err, jerr
 from security import auth_ok, rate_ok
+from config import API_RATE_LIMIT
 from serving import serve
 from url_utils import normalize_url
 
@@ -75,6 +76,9 @@ def guard():
         return None
     if not auth_ok():
         return jerr("unauthorized", 401)
+    # API المفتاح لا ينبغي أن يتجاوز طبقة الحماية؛ نستخدم حداً منفصلاً عن الواجهة العامة.
+    if p in ("/info", "/link", "/stream") and not rate_ok(API_RATE_LIMIT):
+        return jerr("طلبات كثيرة، انتظر دقيقة ثم حاول مجددا", 429)
 
 
 @app.after_request
