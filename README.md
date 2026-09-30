@@ -45,3 +45,10 @@ const buf = Buffer.from(await res.arrayBuffer());
 | RATE_LIMIT_PER_MIN | حد طلبات الواجهة العامة لكل IP (افتراضي 10) |
 | MAX_DOWNLOADS | تنزيلات متزامنة (افتراضي 3) |
 | PROXY | اختياري |
+
+## الأداء والتنزيل
+- التنزيل يتم على أجزاء (Range) مثل yt-dlp، مع إعادة محاولة عند الانقطاع ودعم استئناف التنزيل.
+- نتائج التحليل تُحفظ 20 دقيقة (CACHE_TTL_SEC) فلا يُعاد الاستخراج عند التنزيل.
+- ليوتيوب: يفحص التطبيق أن الروابط مقبولة، وإن رُفضت يجرب عملاء بديلين (YT_FALLBACK_CLIENTS).
+- الحدود: MAX_CONCURRENT (استخراج، افتراضي 2)، MAX_DOWNLOADS (تنزيلات متزامنة، افتراضي 6)، RATE_LIMIT_PER_MIN (افتراضي 30).
+- لتحديث yt-dlp: أعد النشر من Render (Manual Deploy → Clear build cache & deploy).

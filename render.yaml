@@ -12,7 +12,7 @@ services:
       - key: ENABLE_POT
         value: "1"
       - key: AUTO_UPDATE
-        value: "1"
+        value: "0"
       - key: WEB_PUBLIC
         value: "1"
       - key: MAX_CONCURRENT

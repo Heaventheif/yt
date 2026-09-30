@@ -17,7 +17,9 @@ RUN VER=$(pip show bgutil-ytdlp-pot-provider | awk '/^Version:/{print $2}') \
    || git clone --depth 1 https://github.com/Brainicism/bgutil-ytdlp-pot-provider.git /opt/bgutil ) \
  && cd /opt/bgutil/server && npm ci && npx tsc
 
-COPY app.py start.sh ./
+COPY *.py start.sh ./
 RUN chmod +x start.sh
+
+ENV NODE_OPTIONS=--max-old-space-size=192
 
 CMD ["./start.sh"]

@@ -1,95 +1,50 @@
-import base64
-import json
 import os
 import re
 import threading
 import time
+from collections import OrderedDict
 
 import requests
 import yt_dlp
-from flask import Flask, Response, jsonify, request, stream_with_context
+from flask import Flask, Response, jsonify, request
+from requests.adapters import HTTPAdapter
+from requests.utils import quote
+
+from cookies_util import COOKIE_STATS, COOKIES_PATH
+from pages import DOCS_HTML, ENCODE_HTML, WEB_HTML
 
 app = Flask(__name__)
 
 API_KEY = os.getenv("API_KEY", "")
-PROXY = os.getenv("PROXY", "")  # اختياري
-YT_CLIENTS = [c.strip() for c in os.getenv("YT_CLIENTS", "").split(",") if c.strip()]
-COOKIES_PATH = "/tmp/cookies.txt"
-WEB_PUBLIC = os.getenv("WEB_PUBLIC", "1") == "1"  # واجهة عامة بدون مفتاح
-RATE_LIMIT = int(os.getenv("RATE_LIMIT_PER_MIN", "10"))  # طلبات/دقيقة لكل IP للواجهة العامة
-DL_SLOTS = threading.Semaphore(int(os.getenv("MAX_DOWNLOADS", "3")))  # تنزيلات متزامنة
+PROXY = os.getenv("PROXY", "")
+WEB_PUBLIC = os.getenv("WEB_PUBLIC", "1") == "1"
+RATE_LIMIT = int(os.getenv("RATE_LIMIT_PER_MIN", "30"))
+MAX_DOWNLOADS = int(os.getenv("MAX_DOWNLOADS", "6"))
+MAX_EXTRACT = int(os.getenv("MAX_CONCURRENT", "2"))
+CACHE_TTL = int(os.getenv("CACHE_TTL_SEC", "1200"))
+CACHE_MAX = int(os.getenv("CACHE_MAX", "80"))
+CHUNK = int(float(os.getenv("CHUNK_MB", "8")) * 1048576)
+
+
+def _clients(v):
+    return [c.strip() for c in v.split(",") if c.strip()]
+
+
+YT_CLIENTS = _clients(os.getenv("YT_CLIENTS", ""))
+YT_FALLBACKS = [_clients(x) for x in os.getenv("YT_FALLBACK_CLIENTS", "android_vr;tv;mweb").split(";") if x.strip()]
+
+SLOTS = threading.Semaphore(MAX_EXTRACT)      # استخراج المعلومات (ثقيل)
+DL_SLOTS = threading.Semaphore(MAX_DOWNLOADS)  # تنزيلات متزامنة (خفيفة)
 HITS = {}
-SLOTS = threading.Semaphore(int(os.getenv("MAX_CONCURRENT", "2")))  # حماية الذاكرة 512MB
 
-# ---- cookies: تحميل مرن (base64 / نص مباشر / JSON) وتحويل تلقائي لصيغة Netscape ----
-COOKIE_STATS = {"loaded": False, "cookies": 0, "domains": []}
-
-
-def _normalize_cookies(text):
-    text = text.replace("\r\n", "\n").replace("\r", "\n").strip()
-    lines = []
-    if text[:1] in ("[", "{"):  # تصدير JSON من بعض الإضافات
-        try:
-            data = json.loads(text)
-        except Exception:
-            data = []
-        if isinstance(data, dict):
-            data = data.get("cookies", [])
-        for c in data if isinstance(data, list) else []:
-            dom, name = c.get("domain", ""), c.get("name")
-            if not dom or not name:
-                continue
-            try:
-                exp = max(int(float(c.get("expirationDate") or c.get("expires") or 0)), 0)
-            except Exception:
-                exp = 0
-            lines.append("\t".join([
-                ("#HttpOnly_" if c.get("httpOnly") else "") + dom,
-                "TRUE" if dom.startswith(".") else "FALSE",
-                c.get("path", "/"),
-                "TRUE" if c.get("secure") else "FALSE",
-                str(exp), name, str(c.get("value", "")),
-            ]))
-    else:
-        for ln in text.split("\n"):
-            if not ln.strip() or (ln.startswith("#") and not ln.startswith("#HttpOnly_")):
-                continue
-            parts = ln.split("\t")
-            if len(parts) != 7:  # إذا تحولت التابات إلى مسافات
-                parts = re.split(r"\s+", ln.strip(), maxsplit=6)
-            if len(parts) == 7:
-                lines.append("\t".join(parts))
-    return lines
-
-
-def load_cookies():
-    raw = (os.getenv("COOKIES_B64") or "").strip().strip("\"'")
-    if not raw:
-        return
-    text = raw
-    lines = []
-    for _ in range(3):  # يتعامل أيضا مع base64 مزدوج
-        lines = _normalize_cookies(text)
-        if lines:
-            break
-        compact = re.sub(r"\s+", "", text)
-        compact += "=" * (-len(compact) % 4)
-        try:
-            text = base64.b64decode(compact).decode("utf-8-sig", errors="ignore")
-        except Exception:
-            break
-    if not lines:
-        print("[cookies] لم يتم العثور على أسطر كوكيز صالحة — تأكد من الملف/الترميز", flush=True)
-        return
-    with open(COOKIES_PATH, "w", encoding="utf-8") as f:
-        f.write("# Netscape HTTP Cookie File\n" + "\n".join(lines) + "\n")
-    doms = sorted({l.split("\t")[0].replace("#HttpOnly_", "").lstrip(".") for l in lines})
-    COOKIE_STATS.update(loaded=True, cookies=len(lines), domains=doms[:30])
-    print(f"[cookies] loaded {len(lines)} cookies", flush=True)
-
-
-load_cookies()
-
+# جلسة HTTP مشتركة بإعادة استخدام الاتصالات
+sess = requests.Session()
+sess.trust_env = False
+_ad = HTTPAdapter(pool_connections=20, pool_maxsize=64, max_retries=0)
+sess.mount("https://", _ad)
+sess.mount("http://", _ad)
+if PROXY:
+    sess.proxies = {"http": PROXY, "https": PROXY}
 
 # ---- Keep-alive: يزور السيرفر نفسه كل 14 دقيقة لمنع النوم ----
 KEEP_ALIVE_MIN = int(os.getenv("KEEP_ALIVE_MINUTES", "14"))
@@ -97,7 +52,6 @@ SELF_URL = os.getenv("SELF_URL") or os.getenv("RENDER_EXTERNAL_URL", "")
 
 
 def keep_alive():
-    import time
     while True:
         time.sleep(KEEP_ALIVE_MIN * 60)
         try:
@@ -110,283 +64,42 @@ if SELF_URL and KEEP_ALIVE_MIN > 0:
     threading.Thread(target=keep_alive, daemon=True).start()
 
 
+class Busy(Exception):
+    pass
+
+
+class UpstreamError(RuntimeError):
+    def __init__(self, code):
+        super().__init__(f"HTTP {code}")
+        self.code = code
+
+
+# ------------------------- أدوات عامة -------------------------
 def auth_ok():
     if not API_KEY:
         return True
-    key = request.headers.get("X-API-Key") or request.args.get("key")
-    return key == API_KEY
+    return (request.headers.get("X-API-Key") or request.args.get("key")) == API_KEY
 
 
-def base_opts():
-    opts = {
-        "quiet": True,
-        "no_warnings": True,
-        "noplaylist": True,
-        "skip_download": True,
-        "socket_timeout": 20,
-        "retries": 2,
-        "js_runtimes": {"node": {}},  # yt-dlp يحتاج JS runtime ليفك تشفير يوتيوب
-    }
-    if YT_CLIENTS:
-        opts["extractor_args"] = {"youtube": {"player_client": YT_CLIENTS}}
-    if os.path.exists(COOKIES_PATH):
-        opts["cookiefile"] = COOKIES_PATH
-    if PROXY:
-        opts["proxy"] = PROXY
-    return opts
+def jerr(msg, code=502):
+    return jsonify(ok=False, error=msg), code
 
 
-def selector(kind, quality):
-    if kind == "audio":
-        return "bestaudio[ext=m4a]/bestaudio/best"
-    q = int(quality) if str(quality).isdigit() else 720
-    return f"best[ext=mp4][height<=?{q}]/best[height<=?{q}]/best"
-
-
-def extract(url, fmt=None):
-    opts = base_opts()
-    if fmt:
-        opts["format"] = fmt
-    with SLOTS:
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            return ydl.extract_info(url, download=False)
+def err(e):
+    if isinstance(e, Busy):
+        return jerr(str(e), 429)
+    msg = re.sub(r"\x1b\[[0-9;]*m", "", str(e)).strip()
+    return jerr(msg[:400] or "خطأ غير معروف", 502)
 
 
 def valid_url():
     url = request.args.get("url", "").strip()
-    if not re.match(r"^https?://", url):
-        return None
-    return url
-
-
-def err(e, code=502):
-    msg = re.sub(r"\x1b\[[0-9;]*m", "", str(e))
-    return jsonify(ok=False, error=msg[:500]), code
-
-
-DOCS_HTML = """<!doctype html>
-<html lang="ar" dir="rtl"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>yt-dlp API</title>
-<style>
-body{font-family:system-ui,sans-serif;max-width:760px;margin:24px auto;padding:0 16px;line-height:1.7;background:#111;color:#eee}
-input,select,button{font:inherit;padding:10px;border-radius:8px;border:1px solid #444;background:#1c1c1c;color:#eee;margin:4px 0}
-input{width:100%;box-sizing:border-box}
-button{cursor:pointer;background:#2b6cff;border:0;margin-inline-end:6px}
-button.alt{background:#333}
-pre{background:#1c1c1c;padding:12px;border-radius:8px;overflow:auto;direction:ltr;text-align:left;white-space:pre-wrap}
-code{direction:ltr;unicode-bidi:embed}
-h1,h2{margin-bottom:4px}
-</style></head><body>
-<h1>yt-dlp API</h1>
-<p>الخدمة تعمل. جرّبها من هنا أو استخدمها كـ API من بوتك.</p>
-
-<input id="key" placeholder="API Key (من Render ← Environment)" type="password">
-<input id="url" placeholder="رابط الفيديو https://..." dir="ltr">
-<select id="type"><option value="video">فيديو</option><option value="audio">صوت</option></select>
-<select id="q"><option>360</option><option>480</option><option selected>720</option></select><br>
-<button onclick="info()">معلومات</button>
-<button onclick="dl()">تحميل</button>
-<button class="alt" onclick="lnk()">رابط مباشر</button>
-<pre id="out">النتيجة تظهر هنا…</pre>
-
-<h2>التوثيق</h2>
-<p>كل الطلبات (عدا <code>/health</code>) تحتاج المفتاح: هيدر <code>X-API-Key</code> أو <code>?key=</code>.</p>
-<pre>GET /health
-GET /info?url=URL
-GET /link?url=URL&amp;type=video|audio&amp;q=720
-GET /stream?url=URL&amp;type=video|audio&amp;q=720</pre>
-<p>مثال curl:</p>
-<pre id="ex"></pre>
-<p>مثال Node.js (للبوت):</p>
-<pre id="ex2"></pre>
-
-<script>
-const $=id=>document.getElementById(id), B=location.origin;
-$('key').value=localStorage.k||''; $('url').value=localStorage.u||'';
-function P(){localStorage.k=$('key').value;localStorage.u=$('url').value;
- return 'url='+encodeURIComponent($('url').value)+'&type='+$('type').value+'&q='+$('q').value}
-async function call(path){ $('out').textContent='جارٍ التنفيذ…';
- try{const r=await fetch(B+path+'?'+P(),{headers:{'X-API-Key':$('key').value}});
- $('out').textContent=JSON.stringify(await r.json(),null,2)}catch(e){$('out').textContent=e}}
-const info=()=>call('/info'), lnk=()=>call('/link');
-function dl(){location.href=B+'/stream?'+P()+'&key='+encodeURIComponent($('key').value)}
-$('ex').textContent=`curl -H "X-API-Key: YOUR_KEY" "${B}/info?url=https://youtu.be/VIDEO_ID"\n\ncurl -H "X-API-Key: YOUR_KEY" -o video.mp4 "${B}/stream?url=https://youtu.be/VIDEO_ID&q=480"`;
-$('ex2').textContent=`const res = await fetch("${B}/stream?url=" + encodeURIComponent(url) + "&type=video&q=480",\n  { headers: { "X-API-Key": process.env.YTDLP_KEY } });\nif (!res.ok) throw new Error((await res.json()).error);\nconst buf = Buffer.from(await res.arrayBuffer());`;
-</script></body></html>"""
-
-
-@app.get("/docs")
-def docs():
-    return Response(DOCS_HTML, mimetype="text/html")
-
-
-WEB_HTML = r"""<!doctype html>
-<html lang="ar" dir="rtl"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>تنزيل الفيديو والصوت</title>
-<style>
-*{box-sizing:border-box}
-body{font-family:system-ui,-apple-system,"Segoe UI",Tahoma,sans-serif;background:#0f1115;color:#eee;margin:0;padding:24px 14px;line-height:1.6}
-.wrap{max-width:680px;margin:0 auto}
-h1{font-size:1.5rem;margin:0 0 4px;text-align:center}
-.sub{text-align:center;color:#9aa;margin:0 0 18px;font-size:.9rem}
-.bar{display:flex;gap:8px}
-.bar input{flex:1;min-width:0;padding:14px;border-radius:12px;border:1px solid #333;background:#1a1d24;color:#eee;font-size:1rem;direction:ltr}
-button,.btn{cursor:pointer;border:0;border-radius:12px;background:#2b6cff;color:#fff;padding:12px 18px;font:inherit;text-decoration:none;display:inline-block}
-button:disabled{opacity:.5;cursor:wait}
-.msg{text-align:center;color:#9aa;margin:18px 0}
-.err{color:#ff7b7b}
-.card{background:#1a1d24;border-radius:14px;padding:14px;margin-top:16px}
-.head{display:flex;gap:12px;align-items:flex-start}
-.head img{width:120px;max-width:38%;border-radius:10px;flex-shrink:0}
-.head h3{margin:0 0 4px;font-size:1rem;word-break:break-word}
-.head small{color:#9aa}
-.tabs{display:flex;gap:8px;margin:14px 0 6px}
-.tabs button{flex:1;background:#262a33}
-.tabs button.on{background:#2b6cff}
-.row{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:10px 4px;border-top:1px solid #2a2e38}
-.row span small{color:#9aa;margin-inline-start:6px}
-.foot{text-align:center;color:#667;font-size:.8rem;margin-top:24px}
-</style></head><body><div class="wrap">
-<h1>تنزيل الفيديو والصوت</h1>
-<p class="sub">الصق الرابط، اختر الصيغة والجودة، ثم نزّل</p>
-<div class="bar">
-  <input id="url" placeholder="https://..." autocomplete="off" inputmode="url">
-  <button id="go">بحث</button>
-</div>
-<div id="res"></div>
-<p class="foot">للاستخدام الشخصي فقط. تأكد من حقك في تنزيل المحتوى.</p>
-</div>
-<script>
-const $=id=>document.getElementById(id);
-function el(t,c,txt){const e=document.createElement(t);if(c)e.className=c;if(txt!=null)e.textContent=txt;return e}
-function dur(s){if(!s)return'';s=Math.round(s);const h=Math.floor(s/3600),m=Math.floor(s%3600/60),x=s%60;
-  return (h?h+':'+String(m).padStart(2,'0'):m)+':'+String(x).padStart(2,'0')}
-function mb(n){return n?(n/1048576).toFixed(n>10485760?0:1)+' MB':''}
-function msg(t,cls){const b=$('res');b.innerHTML='';b.appendChild(el('p','msg '+(cls||''),t))}
-
-async function search(){
-  const url=$('url').value.trim();
-  if(!/^https?:\/\//i.test(url)){msg('الصق رابطاً صحيحاً يبدأ بـ http','err');return}
-  msg('جارٍ التحليل… (قد يستغرق أول طلب دقيقة إن كانت الخدمة نائمة)');
-  $('go').disabled=true;
-  try{
-    const r=await fetch('/web/info?url='+encodeURIComponent(url));
-    const d=await r.json();
-    if(!d.ok)throw new Error(d.error||'فشل جلب المعلومات');
-    render(d,url);
-  }catch(e){msg(e.message,'err')}
-  $('go').disabled=false;
-}
-
-function render(d,url){
-  const box=$('res');box.innerHTML='';
-  const card=el('div','card');
-  const head=el('div','head');
-  if(d.thumbnail){const im=el('img');im.src=d.thumbnail;im.referrerPolicy='no-referrer';head.appendChild(im)}
-  const meta=el('div');
-  meta.appendChild(el('h3',null,d.title||'بدون عنوان'));
-  meta.appendChild(el('small',null,[d.uploader,dur(d.duration)].filter(Boolean).join(' • ')));
-  head.appendChild(meta);card.appendChild(head);
-
-  const tabs=el('div','tabs'),list=el('div');
-  const bV=el('button','on','فيديو ('+d.video.length+')'),bA=el('button',null,'صوت ('+d.audio.length+')');
-  tabs.appendChild(bV);tabs.appendChild(bA);card.appendChild(tabs);card.appendChild(list);
-
-  function show(items){
-    list.innerHTML='';
-    if(!items.length){list.appendChild(el('p','msg','لا توجد صيغ متاحة في هذا القسم'));return}
-    items.forEach(o=>{
-      const row=el('div','row'),sp=el('span',null,o.label);
-      if(o.size)sp.appendChild(el('small',null,mb(o.size)));
-      const a=el('a','btn','تنزيل');
-      a.href='/web/dl?url='+encodeURIComponent(url)+'&fid='+encodeURIComponent(o.fid);
-      a.setAttribute('download','');
-      row.appendChild(sp);row.appendChild(a);list.appendChild(row);
-    });
-  }
-  bV.onclick=()=>{bV.className='on';bA.className='';show(d.video)};
-  bA.onclick=()=>{bA.className='on';bV.className='';show(d.audio)};
-  if(d.video.length||!d.audio.length)show(d.video);else{bA.click()}
-  box.appendChild(card);
-}
-$('go').onclick=search;
-$('url').addEventListener('keydown',e=>{if(e.key==='Enter')search()});
-</script></body></html>"""
-
-
-@app.get("/")
-def index():
-    if not WEB_PUBLIC:
-        return Response(DOCS_HTML, mimetype="text/html")
-    return Response(WEB_HTML, mimetype="text/html")
-
-
-ENCODE_HTML = r"""<!doctype html>
-<html lang="ar" dir="rtl"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>تشفير الكوكيز base64</title>
-<style>
-*{box-sizing:border-box}
-body{font-family:system-ui,sans-serif;background:#0f1115;color:#eee;margin:0;padding:20px 14px;line-height:1.7}
-.w{max-width:680px;margin:0 auto}
-h1{font-size:1.35rem;text-align:center;margin:0 0 4px}
-.s{text-align:center;color:#9aa;font-size:.85rem;margin:0 0 14px}
-textarea{width:100%;height:150px;background:#1a1d24;color:#eee;border:1px solid #333;border-radius:10px;padding:10px;direction:ltr;font-family:monospace;font-size:.8rem}
-button,label.b{display:inline-block;cursor:pointer;border:0;border-radius:10px;background:#2b6cff;color:#fff;padding:11px 16px;font:inherit;margin:6px 4px 6px 0}
-button.g,label.g{background:#333}
-input[type=file]{display:none}
-#info{color:#9aa;font-size:.9rem;margin:6px 0}
-.ok{color:#6fdc8c}.bad{color:#ff7b7b}
-</style></head><body><div class="w">
-<h1>تشفير الكوكيز إلى base64</h1>
-<p class="s">التشفير يتم داخل متصفحك فقط، ولا يُرسل شيء لأي سيرفر.</p>
-<label class="b">اختر ملف cookies.txt<input type="file" id="f" accept=".txt,.json,text/plain,application/json"></label>
-<span style="color:#9aa">أو الصق محتواه:</span>
-<textarea id="src" placeholder="# Netscape HTTP Cookie File ..."></textarea>
-<label style="display:block;margin:8px 0"><input type="checkbox" id="only" checked> إبقاء كوكيز youtube.com و google.com فقط (موصى به)</label>
-<button onclick="run()">تشفير</button>
-<div id="info"></div>
-<textarea id="out" readonly placeholder="الناتج يظهر هنا — انسخه إلى COOKIES_B64 في Render"></textarea>
-<button onclick="cp()">نسخ الناتج</button>
-<button class="g" onclick="dec()">فحص: فك الترميز</button>
-<pre id="chk" style="direction:ltr;background:#1a1d24;padding:10px;border-radius:10px;white-space:pre-wrap;display:none"></pre>
-</div>
-<script>
-const $=id=>document.getElementById(id);
-function b64(str){const b=new TextEncoder().encode(str);let s='';for(let i=0;i<b.length;i+=8192)s+=String.fromCharCode.apply(null,b.subarray(i,i+8192));return btoa(s)}
-$('f').onchange=async e=>{const f=e.target.files[0];if(f){$('src').value=await f.text();run()}};
-function run(){
-  let t=$('src').value.replace(/\r\n?/g,'\n').trim();
-  if(!t){$('info').innerHTML='<span class="bad">لا يوجد محتوى</span>';return}
-  let out,n=0,yt=false,tabs=true;
-  if(t[0]==='['||t[0]==='{'){out=t;n='JSON';yt=/youtube|google/.test(t)}
-  else{
-    let ls=t.split('\n').filter(l=>l.trim()&&(!l.startsWith('#')||l.startsWith('#HttpOnly_')));
-    if($('only').checked)ls=ls.filter(l=>/(youtube|google)\.com/.test(l));
-    n=ls.length;yt=ls.some(l=>/youtube\.com/.test(l));tabs=ls.every(l=>l.split('\t').length===7);
-    out='# Netscape HTTP Cookie File\n'+ls.join('\n')+'\n';
-  }
-  if(!n){$('info').innerHTML='<span class="bad">لم أجد كوكيز مطابقة. جرّب إلغاء خيار التصفية.</span>';$('out').value='';return}
-  $('out').value=b64(out);
-  $('info').innerHTML='عدد الكوكيز: '+n+' — '+(yt?'<span class="ok">يوتيوب موجود</span>':'<span class="bad">لا توجد كوكيز يوتيوب (سجّل الدخول ثم صدّر من صفحة youtube.com)</span>')
-    +(tabs?'':' — <span class="bad">التابات مفقودة، لكن السيرفر يصلحها تلقائياً</span>')+' — الحجم: '+$('out').value.length+' حرف';
-}
-async function cp(){const v=$('out').value;if(!v)return;try{await navigator.clipboard.writeText(v)}catch(e){$('out').select();document.execCommand('copy')}$('info').innerHTML+=' — <span class="ok">تم النسخ</span>'}
-function dec(){const v=$('out').value;if(!v)return;const c=$('chk');c.style.display='block';
-  try{c.textContent=new TextDecoder().decode(Uint8Array.from(atob(v),x=>x.charCodeAt(0))).split('\n').slice(0,3).map(l=>l.replace(/\t.*\t/,'\t…\t')).join('\n')}catch(e){c.textContent='فشل الفك'}}
-</script></body></html>"""
-
-
-@app.get("/encode")
-def encode_page():
-    return Response(ENCODE_HTML, mimetype="text/html")
+    return url if re.match(r"^https?://", url) else None
 
 
 def client_ip():
     xff = request.headers.get("X-Forwarded-For", "")
-    return (xff.split(",")[0].strip() or request.remote_addr or "?")
+    return xff.split(",")[0].strip() or request.remote_addr or "?"
 
 
 def rate_ok():
@@ -403,125 +116,54 @@ def rate_ok():
     return True
 
 
-@app.before_request
-def guard():
-    p = request.path
-    if p in ("/", "/health", "/docs", "/encode"):
-        return None
-    if p.startswith("/web/"):
-        if not WEB_PUBLIC:
-            return jsonify(ok=False, error="الواجهة العامة معطلة"), 404
-        if not rate_ok():
-            return jsonify(ok=False, error="طلبات كثيرة، انتظر دقيقة ثم حاول مجددا"), 429
-        return None
-    if not auth_ok():
-        return jsonify(ok=False, error="unauthorized"), 401
+# ------------------------- استخراج + كاش -------------------------
+KEEP_FMT = ("format_id", "url", "ext", "protocol", "vcodec", "acodec", "height", "tbr", "abr",
+            "filesize", "filesize_approx", "http_headers")
 
 
-@app.get("/health")
-def health():
-    return jsonify(ok=True, yt_dlp=yt_dlp.version.__version__)
+def slim(d):
+    """يحتفظ بالحقول اللازمة فقط لتوفير الذاكرة"""
+    if d.get("_type") == "playlist" and d.get("entries"):
+        d = next((e for e in d["entries"] if e), d)
+    fmts = [{k: f.get(k) for k in KEEP_FMT} for f in (d.get("formats") or []) if f.get("url")]
+    if not fmts and d.get("url"):
+        fmts = [{"format_id": "0", "url": d["url"], "ext": d.get("ext") or "mp4",
+                 "protocol": d.get("protocol") or "https", "vcodec": d.get("vcodec"), "acodec": d.get("acodec"),
+                 "height": d.get("height"), "tbr": d.get("tbr"), "abr": d.get("abr"),
+                 "filesize": d.get("filesize"), "filesize_approx": d.get("filesize_approx"),
+                 "http_headers": d.get("http_headers")}]
+    return {"title": d.get("title"), "uploader": d.get("uploader") or d.get("channel"),
+            "duration": d.get("duration"), "thumbnail": d.get("thumbnail"),
+            "extractor": str(d.get("extractor_key") or ""), "formats": fmts}
 
 
-@app.get("/cookies")
-def cookies_status():
-    """حالة الكوكيز (بدون قيم) — تحتاج المفتاح"""
-    yt = any(d.endswith(("youtube.com", "google.com")) for d in COOKIE_STATS["domains"])
-    return jsonify(ok=True, has_youtube=yt, **COOKIE_STATS)
+def ytdl_opts(clients=None):
+    o = {"quiet": True, "no_warnings": True, "noplaylist": True, "skip_download": True,
+         "socket_timeout": 20, "retries": 2, "js_runtimes": {"node": {}},
+         "ignore_no_formats_error": True}
+    cl = YT_CLIENTS if clients is None else clients
+    if cl:
+        o["extractor_args"] = {"youtube": {"player_client": cl}}
+    if os.path.exists(COOKIES_PATH):
+        o["cookiefile"] = COOKIES_PATH
+    if PROXY:
+        o["proxy"] = PROXY
+    return o
 
 
-@app.get("/info")
-def info():
-    url = valid_url()
-    if not url:
-        return jsonify(ok=False, error="url مطلوب"), 400
+def extract_raw(url, clients=None):
+    if not SLOTS.acquire(timeout=45):
+        raise Busy("الخادم مشغول بطلبات أخرى، حاول بعد قليل")
     try:
-        d = extract(url)
-    except Exception as e:
-        return err(e)
-    formats = [
-        {
-            "id": f.get("format_id"),
-            "ext": f.get("ext"),
-            "height": f.get("height"),
-            "size": f.get("filesize") or f.get("filesize_approx"),
-            "video": f.get("vcodec") not in (None, "none"),
-            "audio": f.get("acodec") not in (None, "none"),
-        }
-        for f in d.get("formats", [])
-    ]
-    return jsonify(
-        ok=True,
-        title=d.get("title"),
-        uploader=d.get("uploader"),
-        duration=d.get("duration"),
-        thumbnail=d.get("thumbnail"),
-        formats=formats,
-    )
+        with yt_dlp.YoutubeDL(ytdl_opts(clients)) as ydl:
+            return slim(ydl.extract_info(url, download=False))
+    finally:
+        SLOTS.release()
 
 
-@app.get("/link")
-def link():
-    """يرجع رابط مباشر. ملاحظة: روابط يوتيوب مرتبطة بـ IP السيرفر، الأفضل استخدام /stream"""
-    url = valid_url()
-    if not url:
-        return jsonify(ok=False, error="url مطلوب"), 400
-    try:
-        d = extract(url, selector(request.args.get("type", "video"), request.args.get("q")))
-    except Exception as e:
-        return err(e)
-    return jsonify(ok=True, title=d.get("title"), ext=d.get("ext"), url=d.get("url"))
-
-
-def do_stream(url, fmt, kind="video"):
-    """يمرر الملف عبر السيرفر (يدعم Range). يوتيوب يربط الرابط بـ IP لذلك التمرير ضروري."""
-    if not DL_SLOTS.acquire(blocking=False):
-        return jsonify(ok=False, error="الخادم مشغول بتنزيلات أخرى، حاول بعد قليل"), 429
-    try:
-        d = extract(url, fmt)
-        direct = d.get("url")
-        if not direct:
-            DL_SLOTS.release()
-            return jsonify(ok=False, error="لم يتم العثور على صيغة مباشرة"), 404
-
-        headers = dict(d.get("http_headers") or {})
-        if request.headers.get("Range"):
-            headers["Range"] = request.headers["Range"]
-        r = requests.get(direct, headers=headers, stream=True, timeout=30)
-    except Exception as e:
-        DL_SLOTS.release()
-        return err(e)
-
-    name = re.sub(r'[\\/:*?"<>|\r\n]+', "_", d.get("title") or "file")[:80]
-    ext = d.get("ext") or ("m4a" if kind == "audio" else "mp4")
-    out = {"Content-Disposition": "attachment; filename*=UTF-8''" + requests.utils.quote(name + "." + ext)}
-    for h in ("Content-Type", "Content-Length", "Content-Range", "Accept-Ranges"):
-        if r.headers.get(h):
-            out[h] = r.headers[h]
-
-    def gen():
-        try:
-            yield from r.iter_content(chunk_size=256 * 1024)
-        finally:
-            r.close()
-            DL_SLOTS.release()
-
-    return Response(stream_with_context(gen()), status=r.status_code, headers=out)
-
-
-@app.get("/stream")
-def stream():
-    url = valid_url()
-    if not url:
-        return jsonify(ok=False, error="url مطلوب"), 400
-    kind = request.args.get("type", "video")
-    return do_stream(url, selector(kind, request.args.get("q")), kind)
-
-
-# ------------------- الواجهة العامة (بدون مفتاح) -------------------
-def collect_options(d):
+def collect_options(info):
     vids, auds = {}, {}
-    for f in d.get("formats", []):
+    for f in info.get("formats", []):
         if f.get("protocol") not in ("http", "https") or not f.get("url") or f.get("ext") == "mhtml":
             continue
         has_v = f.get("vcodec") != "none"
@@ -533,39 +175,382 @@ def collect_options(d):
             score = (f.get("ext") == "mp4", f.get("tbr") or 0)
             if h not in vids or score > vids[h][0]:
                 label = (f"{h}p" if h else "جودة قياسية") + f" • {ext}"
-                vids[h] = (score, {"fid": f["format_id"], "label": label, "size": size})
+                vids[h] = (score, {"fid": f["format_id"], "label": label, "size": size, "height": h})
         elif has_a and not has_v:
             abr = int(f.get("abr") or 0)
             key = (ext, abr)
             if key not in auds:
-                label = f"{ext}" + (f" • {abr}kbps" if abr else "")
-                auds[key] = ((abr,), {"fid": f["format_id"], "label": label, "size": size})
+                label = ext + (f" • {abr}kbps" if abr else "")
+                auds[key] = (abr, {"fid": f["format_id"], "label": label, "size": size, "height": 0})
     video = [v[1] for _, v in sorted(vids.items(), key=lambda x: -x[0])]
-    audio = [v[1] for v in sorted(auds.values(), key=lambda x: -x[0][0])]
+    audio = [v[1] for v in sorted(auds.values(), key=lambda x: -x[0])]
     return video, audio
 
 
+def get_fmt(info, fid):
+    for f in info.get("formats", []):
+        if f.get("format_id") == fid and f.get("url"):
+            return f
+    return None
+
+
+def match_fmt(info, old):
+    """بعد إعادة الاستخراج قد تتغير المعرفات، نبحث عن أقرب صيغة"""
+    f = get_fmt(info, old.get("format_id"))
+    if f:
+        return f
+    aud = old.get("vcodec") == "none"
+    for f in info.get("formats", []):
+        if (f.get("ext") == old.get("ext") and f.get("height") == old.get("height")
+                and (f.get("vcodec") == "none") == aud and f.get("url")
+                and f.get("protocol") in ("http", "https")):
+            return f
+    return None
+
+
+def probe(info):
+    """فحص سريع: هل يقبل المصدر طلب Range من هذا السيرفر؟ يرجع كود HTTP أو None"""
+    v, a = collect_options(info)
+    cands = [get_fmt(info, o["fid"]) for o in (v[:1] + a[:1])]
+    if not cands:
+        return None
+    for f in cands:
+        h = dict(f.get("http_headers") or {})
+        h["Range"] = "bytes=0-1"
+        try:
+            r = sess.get(f["url"], headers=h, stream=True, timeout=(8, 12))
+            code = r.status_code
+            r.close()
+        except Exception:
+            code = 0
+        if code not in (200, 206):
+            return code
+    return 200
+
+
+def smart_extract(url):
+    info = extract_raw(url)
+    if not info["extractor"].lower().startswith("youtube"):
+        return info
+    first_err = None
+    code = probe(info)
+    if code in (200, 206):
+        return info
+    for cl in YT_FALLBACKS:  # يوتيوب: جرّب عملاء بديلين إذا رُفضت الروابط
+        try:
+            alt = extract_raw(url, cl)
+        except Busy:
+            raise
+        except Exception as e:
+            first_err = first_err or e
+            continue
+        c2 = probe(alt)
+        if c2 in (200, 206):
+            return alt
+    if code is None and first_err:
+        raise first_err
+    if code is None:
+        raise RuntimeError("لم أجد صيغ قابلة للتنزيل لهذا الرابط")
+    raise RuntimeError(f"رفض يوتيوب روابط التنزيل (HTTP {code}). حدّث الكوكيز أو جرّب لاحقا")
+
+
+_cache = OrderedDict()
+_errs = {}
+_inflight = {}
+_cache_lock = threading.Lock()
+
+
+def cache_get(key):
+    with _cache_lock:
+        item = _cache.get(key)
+        if item and time.time() - item[0] < CACHE_TTL:
+            _cache.move_to_end(key)
+            return item[1]
+        _cache.pop(key, None)
+    return None
+
+
+def cache_put(key, val):
+    with _cache_lock:
+        _cache[key] = (time.time(), val)
+        _cache.move_to_end(key)
+        while len(_cache) > CACHE_MAX:
+            _cache.popitem(last=False)
+
+
+def get_info(url, fresh=False):
+    if not fresh:
+        c = cache_get(url)
+        if c:
+            return c
+        e = _errs.get(url)
+        if e and time.time() - e[0] < 20:
+            raise RuntimeError(e[1])
+    with _cache_lock:
+        lk = _inflight.setdefault(url, threading.Lock())
+    with lk:  # طلبات نفس الرابط تنتظر نتيجة واحدة بدل استخراج مكرر
+        if not fresh:
+            c = cache_get(url)
+            if c:
+                return c
+        try:
+            info = smart_extract(url)
+        except Busy:
+            raise
+        except Exception as e:
+            if len(_errs) > 200:
+                _errs.clear()
+            _errs[url] = (time.time(), re.sub(r"\x1b\[[0-9;]*m", "", str(e))[:400])
+            raise
+        finally:
+            with _cache_lock:
+                _inflight.pop(url, None)
+        _errs.pop(url, None)
+        cache_put(url, info)
+        return info
+
+
+def info_payload(info):
+    video, audio = collect_options(info)
+    return {"ok": True, "title": info["title"], "uploader": info["uploader"],
+            "duration": info["duration"], "thumbnail": info["thumbnail"],
+            "video": video, "audio": audio}
+
+
+# ------------------------- تمرير الملف -------------------------
+def fetch_range(fmt, start, last):
+    h = dict(fmt.get("http_headers") or {})
+    h["Range"] = f"bytes={start}-{min(last, start + CHUNK - 1)}"
+    try:
+        r = sess.get(fmt["url"], headers=h, stream=True, timeout=(10, 30))
+    except Exception:
+        return None
+    if r.status_code == 206 or (r.status_code == 200 and start == 0):
+        return r
+    r.close()
+    return None
+
+
+def open_upstream(fmt, cstart=0, cend=None):
+    end = cstart + CHUNK - 1
+    if cend is not None:
+        end = min(end, cend)
+    h = dict(fmt.get("http_headers") or {})
+    h["Range"] = f"bytes={cstart}-{end}"
+    try:
+        r = sess.get(fmt["url"], headers=h, stream=True, timeout=(10, 30))
+    except Exception as e:
+        raise RuntimeError("تعذر الاتصال بمصدر الملف: " + type(e).__name__)
+    code = r.status_code
+    if code == 206:
+        m = re.match(r"bytes (\d+)-(\d+)/(\d+|\*)", r.headers.get("Content-Range", ""))
+        total = int(m.group(3)) if m and m.group(3).isdigit() else None
+        ranged = True
+    elif code == 200 and cstart == 0:
+        cl = r.headers.get("Content-Length", "")
+        total = int(cl) if cl.isdigit() else None
+        ranged = False
+    else:
+        r.close()
+        raise UpstreamError(code)
+    last = (total - 1) if total else (1 << 62)
+    if cend is not None:
+        last = min(last, cend)
+    return r, total, last, ranged
+
+
+def stream_gen(fmt, r, pos, last, ranged, slot):
+    """يمرر الملف على أجزاء (Range) مثل yt-dlp مع إعادة محاولة عند الانقطاع"""
+    fails = 0
+    try:
+        while True:
+            got = 0
+            try:
+                for piece in r.iter_content(262144):
+                    if piece:
+                        got += len(piece)
+                        pos += len(piece)
+                        yield piece
+            except Exception:
+                fails += 1
+            finally:
+                r.close()
+            if not ranged or pos > last:
+                return
+            if got == 0:
+                fails += 1
+            if fails > 3:
+                return
+            r = fetch_range(fmt, pos, last)
+            if r is None:
+                return
+    finally:
+        try:
+            r.close()
+        except Exception:
+            pass
+        slot.release()  # تحرير فوري عند الانتهاء أو انقطاع العميل
+
+
+class Slot:
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.done = False
+
+    def release(self):
+        with self.lock:
+            if not self.done:
+                self.done = True
+                DL_SLOTS.release()
+
+
+CTYPES = {"mp4": "video/mp4", "webm": "video/webm", "m4a": "audio/mp4", "mp3": "audio/mpeg",
+          "opus": "audio/ogg", "ogg": "audio/ogg", "flv": "video/x-flv", "3gp": "video/3gpp"}
+
+
+def disposition(name, ext):
+    fn = f"{name}.{ext}"
+    ascii_fn = re.sub(r"[^A-Za-z0-9._ \-\[\]()]+", "_", fn) or f"file.{ext}"
+    return 'attachment; filename="' + ascii_fn + '"; filename*=UTF-8' + "''" + quote(fn)
+
+
+def serve(url, fid, check=False):
+    info = get_info(url)
+    fmt = get_fmt(info, fid)
+    if not fmt:
+        return jerr("الصيغة غير موجودة، أعد البحث عن الرابط", 404)
+
+    cstart, cend = 0, None
+    m = re.match(r"bytes=(\d+)-(\d*)$", (request.headers.get("Range") or "").strip())
+    if m and not check:
+        cstart = int(m.group(1))
+        cend = int(m.group(2)) if m.group(2) else None
+
+    if not DL_SLOTS.acquire(blocking=False):
+        return jerr("الخادم مشغول بتنزيلات أخرى، حاول بعد قليل", 429)
+    slot, handed = Slot(), False
+    try:
+        up = None
+        for attempt in (0, 1):
+            try:
+                up = open_upstream(fmt, cstart, cend)
+                break
+            except UpstreamError as e:
+                if attempt == 1 or e.code not in (401, 403, 404, 410):
+                    return jerr(f"رفض المصدر الطلب (HTTP {e.code})", 502)
+                try:  # الرابط انتهى أو رُفض: استخراج جديد ثم محاولة أخيرة
+                    info = get_info(url, fresh=True)
+                except Exception as ex:
+                    return err(ex)
+                fmt = match_fmt(info, fmt)
+                if not fmt:
+                    return jerr("تغيرت الصيغ المتاحة، أعد البحث عن الرابط", 409)
+        r, total, last, ranged = up
+        if last < cstart:
+            r.close()
+            return jerr("نطاق غير صالح", 416)
+        if check:
+            r.close()
+            return jsonify(ok=True, size=total)
+
+        ext = fmt.get("ext") or "bin"
+        audio_only = fmt.get("vcodec") == "none"
+        ctype = CTYPES.get(ext, "application/octet-stream")
+        if audio_only and ext == "webm":
+            ctype = "audio/webm"
+        title = re.sub(r'[\\/:*?"<>|\r\n]+', "_", info.get("title") or "file")[:80]
+        if fmt.get("height") and not audio_only:
+            title += f" [{fmt['height']}p]"
+        out = {"Content-Type": ctype, "Content-Disposition": disposition(title, ext),
+               "Cache-Control": "no-store"}
+        status = 200
+        if ranged and total:
+            out["Accept-Ranges"] = "bytes"
+        if total:
+            out["Content-Length"] = str(last - cstart + 1)
+            if cstart > 0 or (cend is not None and cend < total - 1):
+                status = 206
+                out["Content-Range"] = f"bytes {cstart}-{last}/{total}"
+        resp = Response(stream_gen(fmt, r, cstart, last, ranged, slot), status=status, headers=out)
+        resp.call_on_close(slot.release)
+        handed = True
+        return resp
+    except RuntimeError as e:
+        return err(e)
+    finally:
+        if not handed:
+            slot.release()
+
+
+def pick_fid(info, kind, q):
+    v, a = collect_options(info)
+    if kind == "audio":
+        return a[0]["fid"] if a else None
+    if not v:
+        return None
+    q = int(q) if str(q).isdigit() else 720
+    for o in v:
+        if (o["height"] or 0) <= q:
+            return o["fid"]
+    return v[-1]["fid"]
+
+
+# ------------------------- المسارات -------------------------
+@app.before_request
+def guard():
+    p = request.path
+    if p in ("/", "/health", "/docs", "/encode"):
+        return None
+    if p.startswith("/web/"):
+        if not WEB_PUBLIC:
+            return jerr("الواجهة العامة معطلة", 404)
+        if (p == "/web/info" or request.args.get("check")) and not rate_ok():
+            return jerr("طلبات كثيرة، انتظر دقيقة ثم حاول مجددا", 429)
+        return None
+    if not auth_ok():
+        return jerr("unauthorized", 401)
+
+
+@app.get("/")
+def index():
+    return Response(WEB_HTML if WEB_PUBLIC else DOCS_HTML, mimetype="text/html")
+
+
+@app.get("/docs")
+def docs():
+    return Response(DOCS_HTML, mimetype="text/html")
+
+
+@app.get("/encode")
+def encode_page():
+    return Response(ENCODE_HTML, mimetype="text/html")
+
+
+@app.get("/health")
+def health():
+    return jsonify(ok=True, yt_dlp=yt_dlp.version.__version__)
+
+
+@app.get("/cookies")
+def cookies_status():
+    yt = any(d.endswith(("youtube.com", "google.com")) for d in COOKIE_STATS["domains"])
+    return jsonify(ok=True, has_youtube=yt, **COOKIE_STATS)
+
+
+# --- واجهة عامة ---
 @app.get("/web/info")
 def web_info():
     url = valid_url()
     if not url:
-        return jsonify(ok=False, error="الرابط غير صحيح"), 400
+        return jerr("الرابط غير صحيح", 400)
     try:
-        d = extract(url)
+        info = get_info(url)
     except Exception as e:
         return err(e)
-    video, audio = collect_options(d)
-    if not video and not audio:
-        return jsonify(ok=False, error="لا توجد صيغ قابلة للتنزيل المباشر لهذا الرابط"), 404
-    return jsonify(
-        ok=True,
-        title=d.get("title"),
-        uploader=d.get("uploader"),
-        duration=d.get("duration"),
-        thumbnail=d.get("thumbnail"),
-        video=video,
-        audio=audio,
-    )
+    p = info_payload(info)
+    if not p["video"] and not p["audio"]:
+        return jerr("لا توجد صيغ قابلة للتنزيل المباشر لهذا الرابط", 404)
+    return jsonify(p)
 
 
 @app.get("/web/dl")
@@ -573,8 +558,54 @@ def web_dl():
     url = valid_url()
     fid = request.args.get("fid", "")
     if not url or not re.match(r"^[\w.\-+]+$", fid):
-        return jsonify(ok=False, error="طلب غير صحيح"), 400
-    return do_stream(url, fid)
+        return jerr("طلب غير صحيح", 400)
+    try:
+        return serve(url, fid, check=bool(request.args.get("check")))
+    except Exception as e:
+        return err(e)
+
+
+# --- API بمفتاح (للبوت) ---
+@app.get("/info")
+def api_info():
+    url = valid_url()
+    if not url:
+        return jerr("url مطلوب", 400)
+    try:
+        return jsonify(info_payload(get_info(url)))
+    except Exception as e:
+        return err(e)
+
+
+@app.get("/link")
+def api_link():
+    url = valid_url()
+    if not url:
+        return jerr("url مطلوب", 400)
+    try:
+        info = get_info(url)
+        fid = pick_fid(info, request.args.get("type", "video"), request.args.get("q"))
+        fmt = get_fmt(info, fid) if fid else None
+        if not fmt:
+            return jerr("لا توجد صيغة مناسبة", 404)
+        return jsonify(ok=True, title=info["title"], ext=fmt.get("ext"), url=fmt["url"])
+    except Exception as e:
+        return err(e)
+
+
+@app.get("/stream")
+def api_stream():
+    url = valid_url()
+    if not url:
+        return jerr("url مطلوب", 400)
+    try:
+        info = get_info(url)
+        fid = pick_fid(info, request.args.get("type", "video"), request.args.get("q"))
+        if not fid:
+            return jerr("لا توجد صيغة مناسبة", 404)
+        return serve(url, fid)
+    except Exception as e:
+        return err(e)
 
 
 if __name__ == "__main__":
