@@ -50,7 +50,9 @@ def slim(d):
 
 
 def ytdl_opts(clients=None):
-    yt_args = {"skip": ["hls", "dash", "translated_subs"]}
+    # لا نتخطى DASH: صيغ يوتيوب التكيفية (خصوصا الصوت و1080p+) تأتي غالبا
+    # من DASH. تخطيها كان يجعل الواجهة تعرض صيغة progressive واحدة وصوتا صفرا.
+    yt_args = {"skip": ["hls", "translated_subs"]}
     player_clients = YT_CLIENTS if clients is None else clients
     if player_clients:
         yt_args["player_client"] = player_clients
