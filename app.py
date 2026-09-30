@@ -1,12 +1,15 @@
 """نقاط النهاية (Routes) فقط. المنطق موزع على الوحدات:
 config · errors · net · formats · extractor · info_cache · streaming · serving · security · keepalive
 """
+import os
 import re
+import subprocess
 import threading
+import time
 from functools import wraps
 
 import yt_dlp
-from flask import Flask, Response, jsonify, request
+from flask import Flask, Response, g, jsonify, request
 
 import keepalive
 from config import CORS_ORIGIN, WARMUP, WEB_PUBLIC
@@ -18,12 +21,13 @@ from pages import DOCS_HTML, ENCODE_HTML, WEB_HTML
 from responses import err, jerr
 from security import auth_ok, rate_ok
 from config import API_RATE_LIMIT
+from metrics import record, snapshot
 from serving import serve
 from url_utils import normalize_url
 
 app = Flask(__name__)
 
-PUBLIC_PATHS = ("/", "/health", "/docs", "/encode")
+PUBLIC_PATHS = ("/", "/health", "/ping", "/stats", "/repo", "/docs", "/encode")
 FID_PATTERN = re.compile(r"^[\w.\-+]+$")
 _HTTP_URL = re.compile(r"^https?://")
 
@@ -62,6 +66,10 @@ def _pick(url):
 
 # ------------------------- الحماية -------------------------
 @app.before_request
+def timing_start():
+    g.started_at = time.perf_counter()
+
+@app.before_request
 def guard():
     if request.method == "OPTIONS":  # طلب CORS التمهيدي لا يحمل المفتاح
         return Response(status=204)
@@ -80,6 +88,11 @@ def guard():
     if p in ("/info", "/link", "/stream") and not rate_ok(API_RATE_LIMIT):
         return jerr("طلبات كثيرة، انتظر دقيقة ثم حاول مجددا", 429)
 
+
+@app.after_request
+def collect_metrics(resp):
+    record(request.path, resp.status_code, time.perf_counter() - getattr(g, "started_at", time.perf_counter()))
+    return resp
 
 @app.after_request
 def cors(resp):
@@ -108,7 +121,31 @@ def encode_page():
 
 @app.get("/health")
 def health():
-    return jsonify(ok=True, yt_dlp=yt_dlp.version.__version__)
+    return jsonify(ok=True, yt_dlp=yt_dlp.version.__version__, service="ytdlp-api")
+
+@app.get("/ping")
+def ping():
+    started = time.perf_counter()
+    # لا نلمس المصدر الخارجي؛ هذا يقيس زمن استجابة التطبيق نفسه.
+    return jsonify(ok=True, latency_ms=round((time.perf_counter() - started) * 1000, 2),
+                   server_time=int(time.time()))
+
+@app.get("/stats")
+def stats():
+    return jsonify(snapshot())
+
+@app.get("/repo")
+def repo():
+    def run(*args):
+        try:
+            return subprocess.check_output(["git", *args], cwd=os.path.dirname(__file__),
+                                           text=True, stderr=subprocess.DEVNULL).strip()
+        except Exception:
+            return ""
+    return jsonify(ok=True, name="Heaventheif/yt", branch=run("branch", "--show-current"),
+                   commit=run("rev-parse", "--short", "HEAD"),
+                   updated=run("log", "-1", "--format=%cI"),
+                   url="https://github.com/Heaventheif/yt")
 
 
 @app.get("/cookies")

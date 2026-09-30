@@ -56,6 +56,11 @@ const buf = Buffer.from(await res.arrayBuffer());
 - الحدود: MAX_CONCURRENT (استخراج، افتراضي 2)، MAX_DOWNLOADS (تنزيلات متزامنة، افتراضي 6)، RATE_LIMIT_PER_MIN (افتراضي 30).
 - لتحديث yt-dlp: أعد النشر من Render (Manual Deploy → Clear build cache & deploy).
 
+## الصيغ والجودات
+- `/info` و`/web/info` يعرضان **كل الصيغ المباشرة** المتاحة، وليس صيغة واحدة لكل ارتفاع.
+- كل خيار يتضمن `fid` و`ext` و`vcodec` و`acodec` و`size` و`height`/`abr`.
+- صيغ الفيديو المنفصلة عن الصوت تُعرض كما هي ويمكن تنزيلها منفردة؛ الدمج يحتاج ffmpeg في العميل.
+
 ## تسريع الجلب (fetch)
 - `url_utils.py`: يحوّل أي رابط (m.site.com، youtu.be، shorts، music...) إلى الصيغة القياسية ويحذف باراميترات التتبع، فيصبح لنفس الفيديو مفتاح كاش واحد. يعمل أيضا كسكريبت: `python url_utils.py "رابط"`.
 - استخراج يوتيوب يبدأ بآخر عميل نجح (GOOD_CLIENT) بدل تجربة الافتراضي الفاشل أولا.

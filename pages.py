@@ -1,56 +1,6 @@
-# صفحات الواجهة (HTML)
-
-DOCS_HTML = """<!doctype html>
-<html lang="ar" dir="rtl"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>yt-dlp API</title>
-<style>
-body{font-family:system-ui,sans-serif;max-width:760px;margin:24px auto;padding:0 16px;line-height:1.7;background:#111;color:#eee}
-input,select,button{font:inherit;padding:10px;border-radius:8px;border:1px solid #444;background:#1c1c1c;color:#eee;margin:4px 0}
-input{width:100%;box-sizing:border-box}
-button{cursor:pointer;background:#2b6cff;border:0;margin-inline-end:6px}
-button.alt{background:#333}
-pre{background:#1c1c1c;padding:12px;border-radius:8px;overflow:auto;direction:ltr;text-align:left;white-space:pre-wrap}
-code{direction:ltr;unicode-bidi:embed}
-h1,h2{margin-bottom:4px}
-</style></head><body>
-<h1>yt-dlp API</h1>
-<p>الخدمة تعمل. جرّبها من هنا أو استخدمها كـ API من بوتك.</p>
-
-<input id="key" placeholder="API Key (من Render ← Environment)" type="password">
-<input id="url" placeholder="رابط الفيديو https://..." dir="ltr">
-<select id="type"><option value="video">فيديو</option><option value="audio">صوت</option></select>
-<select id="q"><option>360</option><option>480</option><option selected>720</option></select><br>
-<button onclick="info()">معلومات</button>
-<button onclick="dl()">تحميل</button>
-<button class="alt" onclick="lnk()">رابط مباشر</button>
-<pre id="out">النتيجة تظهر هنا…</pre>
-
-<h2>التوثيق</h2>
-<p>كل الطلبات (عدا <code>/health</code>) تحتاج المفتاح: هيدر <code>X-API-Key</code> أو <code>?key=</code>.</p>
-<pre>GET /health
-GET /info?url=URL
-GET /link?url=URL&amp;type=video|audio&amp;q=720
-GET /stream?url=URL&amp;type=video|audio&amp;q=720</pre>
-<p>مثال curl:</p>
-<pre id="ex"></pre>
-<p>مثال Node.js (للبوت):</p>
-<pre id="ex2"></pre>
-
-<script>
-const $=id=>document.getElementById(id), B=location.origin;
-$('key').value=localStorage.k||''; $('url').value=localStorage.u||'';
-function P(){localStorage.k=$('key').value;localStorage.u=$('url').value;
- return 'url='+encodeURIComponent($('url').value)+'&type='+$('type').value+'&q='+$('q').value}
-async function call(path){ $('out').textContent='جارٍ التنفيذ…';
- try{const r=await fetch(B+path+'?'+P(),{headers:{'X-API-Key':$('key').value}});
- $('out').textContent=JSON.stringify(await r.json(),null,2)}catch(e){$('out').textContent=e}}
-const info=()=>call('/info'), lnk=()=>call('/link');
-function dl(){location.href=B+'/stream?'+P()+'&key='+encodeURIComponent($('key').value)}
-$('ex').textContent=`curl -H "X-API-Key: YOUR_KEY" "${B}/info?url=https://youtu.be/VIDEO_ID"\n\ncurl -H "X-API-Key: YOUR_KEY" -o video.mp4 "${B}/stream?url=https://youtu.be/VIDEO_ID&q=480"`;
-$('ex2').textContent=`const res = await fetch("${B}/stream?url=" + encodeURIComponent(url) + "&type=video&q=480",\n  { headers: { "X-API-Key": process.env.YTDLP_KEY } });\nif (!res.ok) throw new Error((await res.json()).error);\nconst buf = Buffer.from(await res.arrayBuffer());`;
-</script></body></html>"""
-
+DOCS_HTML = r"""<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>توثيق yt-dlp API</title><style>
+:root{color-scheme:dark;--bg:#0b1020;--panel:#131b2f;--line:#263453;--text:#edf3ff;--muted:#91a0bd;--brand:#6c8cff}*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at top,#17264a,var(--bg) 48%);color:var(--text);font-family:system-ui,-apple-system,Segoe UI,Tahoma,sans-serif;line-height:1.65}.wrap{max-width:1020px;margin:auto;padding:28px 18px}.hero{display:flex;justify-content:space-between;gap:18px;align-items:end;margin-bottom:24px}.eyebrow{color:#91aaff;font-weight:700}.hero h1{font-size:clamp(1.7rem,4vw,2.8rem);margin:4px 0}.hero p{color:var(--muted);margin:0}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}.card,pre{background:rgba(19,27,47,.86);border:1px solid var(--line);border-radius:16px;padding:16px}.card strong{display:block;font-size:1.25rem}.muted{color:var(--muted);font-size:.9rem}h2{margin:30px 0 10px}.endpoint{margin:10px 0;padding:12px 14px;border-inline-start:3px solid var(--brand);background:#111a2e;border-radius:8px}.method{color:#8fd5ff;font-weight:800;direction:ltr;display:inline-block}code,pre{direction:ltr;text-align:left;font-family:ui-monospace,SFMono-Regular,Consolas,monospace}pre{overflow:auto;white-space:pre-wrap}a{color:#9db2ff}</style></head><body><main class="wrap"><header class="hero"><div><div class="eyebrow">yt-dlp API</div><h1>توثيق سريع وواضح</h1><p>جلب كل الصيغ المباشرة والجودات المتاحة مع قياس الأداء.</p></div><a href="/">العودة للتحميل</a></header><section class="grid" id="overview"><div class="card"><strong id="latency">—</strong><span class="muted">زمن ping المحلي</span></div><div class="card"><strong id="requests">—</strong><span class="muted">إجمالي الطلبات</span></div><div class="card"><strong id="commit">—</strong><span class="muted">آخر commit</span></div></section><h2>النقاط المتاحة</h2><div class="endpoint"><span class="method">GET /health</span> فحص الخدمة وإصدار yt-dlp — عام.</div><div class="endpoint"><span class="method">GET /ping</span> قياس استجابة التطبيق دون الاتصال بمصدر خارجي — عام.</div><div class="endpoint"><span class="method">GET /stats</span> المتوسط وP95 وعدد الأخطاء والمسارات — عام.</div><div class="endpoint"><span class="method">GET /repo</span> فرع المستودع وcommit ورابط GitHub — عام.</div><div class="endpoint"><span class="method">GET /info?url=URL</span> كل صيغ الفيديو والصوت المباشرة، مع <code>fid</code> والامتداد والكودك والحجم — يحتاج <code>X-API-Key</code>.</div><div class="endpoint"><span class="method">GET /link?url=&amp;type=&amp;q=</span> رابط المصدر لصيغة تلقائية — يحتاج المفتاح.</div><div class="endpoint"><span class="method">GET /stream?url=&amp;type=&amp;q=</span> تمرير التنزيل مع Range واستئناف — يحتاج المفتاح.</div><h2>أمثلة</h2><pre>curl -H "X-API-Key: YOUR_KEY" "https://your-host/info?url=https%3A%2F%2Fyoutu.be%2FVIDEO_ID"
+curl -H "X-API-Key: YOUR_KEY" -o video.mp4 "https://your-host/stream?url=URL&amp;type=video&amp;q=720"</pre><p class="muted">ملاحظة: صيغ الفيديو المنفصلة عن الصوت تُعرض كما هي. دمجها يحتاج ffmpeg أو عميل تنزيل يدعم الدمج.</p></main><script>Promise.all([fetch('/ping'),fetch('/stats'),fetch('/repo')]).then(async([a,b,c])=>{const[p,s,r]=await Promise.all([a.json(),b.json(),c.json()]);document.querySelector('#latency').textContent=p.latency_ms+' ms';document.querySelector('#requests').textContent=s.requests;document.querySelector('#commit').textContent=r.commit||'—'}).catch(()=>{});</script></body></html>"""
 
 ENCODE_HTML = r"""<!doctype html>
 <html lang="ar" dir="rtl"><head><meta charset="utf-8">
@@ -108,119 +58,12 @@ function dec(){const v=$('out').value;if(!v)return;const c=$('chk');c.style.disp
 </script></body></html>"""
 
 
-WEB_HTML = r"""<!doctype html>
-<html lang="ar" dir="rtl"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>تنزيل الفيديو والصوت</title>
-<style>
-*{box-sizing:border-box}
-body{font-family:system-ui,-apple-system,"Segoe UI",Tahoma,sans-serif;background:#0f1115;color:#eee;margin:0;padding:24px 14px;line-height:1.6}
-.wrap{max-width:680px;margin:0 auto}
-h1{font-size:1.5rem;margin:0 0 4px;text-align:center}
-.sub{text-align:center;color:#9aa;margin:0 0 18px;font-size:.9rem}
-.bar{display:flex;gap:8px}
-.bar input{flex:1;min-width:0;padding:14px;border-radius:12px;border:1px solid #333;background:#1a1d24;color:#eee;font-size:1rem;direction:ltr}
-button,.btn{cursor:pointer;border:0;border-radius:12px;background:#2b6cff;color:#fff;padding:12px 18px;font:inherit;text-decoration:none;display:inline-block;white-space:nowrap}
-button:disabled{opacity:.6;cursor:wait}
-.msg{text-align:center;color:#9aa;margin:18px 0}
-.err{color:#ff7b7b}
-.card{background:#1a1d24;border-radius:14px;padding:14px;margin-top:16px}
-.head{display:flex;gap:12px;align-items:flex-start}
-.head img{width:120px;max-width:38%;border-radius:10px;flex-shrink:0}
-.head h3{margin:0 0 4px;font-size:1rem;word-break:break-word}
-.head small{color:#9aa}
-.tabs{display:flex;gap:8px;margin:14px 0 6px}
-.tabs button{flex:1;background:#262a33}
-.tabs button.on{background:#2b6cff}
-.row{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:10px 4px;border-top:1px solid #2a2e38}
-.row span small{color:#9aa;margin-inline-start:8px}
-.note{color:#ff9d9d;font-size:.9rem;margin-top:10px;word-break:break-word}
-.note a{color:#7fb0ff}
-.note.okc{color:#8fdc9f}
-.foot{text-align:center;color:#667;font-size:.8rem;margin-top:24px}
-</style></head><body><div class="wrap">
-<h1>تنزيل الفيديو والصوت</h1>
-<p class="sub">الصق الرابط، اختر الصيغة والجودة، ثم نزّل</p>
-<div class="bar">
-  <input id="url" placeholder="https://..." autocomplete="off" inputmode="url">
-  <button id="go">بحث</button>
-</div>
-<div id="res"></div>
-<p class="foot">للاستخدام الشخصي فقط. تأكد من حقك في تنزيل المحتوى.</p>
-</div>
-<script>
-const $=id=>document.getElementById(id);
-function el(t,c,txt){const e=document.createElement(t);if(c)e.className=c;if(txt!=null)e.textContent=txt;return e}
-function dur(s){if(!s)return'';s=Math.round(s);const h=Math.floor(s/3600),m=Math.floor(s%3600/60),x=s%60;
-  return (h?h+':'+String(m).padStart(2,'0'):m)+':'+String(x).padStart(2,'0')}
-function mb(n){return n?(n/1048576).toFixed(n>10485760?0:1)+' MB':''}
-function msg(t,cls){const b=$('res');b.innerHTML='';b.appendChild(el('p','msg '+(cls||''),t))}
-
-async function jget(u){
-  let r;
-  try{r=await fetch(u)}catch(e){throw new Error('تعذر الاتصال بالخدمة')}
-  let j=null;try{j=await r.json()}catch(e){}
-  if(!j)throw new Error(r.status>=500?'الخدمة غير متاحة الآن ('+r.status+')، انتظر دقيقة ثم أعد المحاولة':'ردّ غير متوقع من الخدمة');
-  return j;
-}
-
-async function search(){
-  const url=$('url').value.trim();
-  if(!/^https?:\/\//i.test(url)){msg('الصق رابطاً صحيحاً يبدأ بـ http','err');return}
-  msg('جارٍ التحليل… (قد يستغرق أول طلب دقيقة إن كانت الخدمة نائمة)');
-  $('go').disabled=true;
-  try{
-    const d=await jget('/web/info?url='+encodeURIComponent(url));
-    if(!d.ok)throw new Error(d.error||'فشل جلب المعلومات');
-    render(d,url);
-  }catch(e){msg(e.message,'err')}
-  $('go').disabled=false;
-}
-
-async function start(o,btn,url,note){
-  const old=btn.textContent;btn.disabled=true;btn.textContent='جارٍ التحضير…';note.className='note';note.textContent='';
-  const q='url='+encodeURIComponent(url)+'&fid='+encodeURIComponent(o.fid);
-  try{
-    const j=await jget('/web/dl?'+q+'&check=1');
-    if(!j.ok)throw new Error(j.error||'فشل التحضير');
-    const a=document.createElement('a');a.href='/web/dl?'+q;document.body.appendChild(a);a.click();a.remove();
-    btn.textContent='بدأ التنزيل ✓';
-    note.className='note okc';note.textContent='بدأ التنزيل — إن لم يبدأ ';
-    const l=el('a',null,'اضغط هنا');l.href='/web/dl?'+q;note.appendChild(l);
-    setTimeout(()=>{btn.textContent=old;btn.disabled=false},5000);
-  }catch(e){btn.textContent=old;btn.disabled=false;note.textContent=e.message}
-}
-
-function render(d,url){
-  const box=$('res');box.innerHTML='';
-  const card=el('div','card');
-  const head=el('div','head');
-  if(d.thumbnail){const im=el('img');im.src=d.thumbnail;im.referrerPolicy='no-referrer';head.appendChild(im)}
-  const meta=el('div');
-  meta.appendChild(el('h3',null,d.title||'بدون عنوان'));
-  meta.appendChild(el('small',null,[d.uploader,dur(d.duration)].filter(Boolean).join(' • ')));
-  head.appendChild(meta);card.appendChild(head);
-
-  const tabs=el('div','tabs'),list=el('div'),note=el('div','note');
-  const bV=el('button','on','فيديو ('+d.video.length+')'),bA=el('button',null,'صوت ('+d.audio.length+')');
-  tabs.appendChild(bV);tabs.appendChild(bA);card.appendChild(tabs);card.appendChild(list);card.appendChild(note);
-
-  function show(items){
-    list.innerHTML='';
-    if(!items.length){list.appendChild(el('p','msg','لا توجد صيغ متاحة في هذا القسم'));return}
-    items.forEach(o=>{
-      const row=el('div','row'),sp=el('span',null,o.label);
-      if(o.size)sp.appendChild(el('small',null,mb(o.size)));
-      const b=el('button',null,'تنزيل');
-      b.onclick=()=>start(o,b,url,note);
-      row.appendChild(sp);row.appendChild(b);list.appendChild(row);
-    });
-  }
-  bV.onclick=()=>{bV.className='on';bA.className='';show(d.video)};
-  bA.onclick=()=>{bA.className='on';bV.className='';show(d.audio)};
-  if(d.video.length||!d.audio.length)show(d.video);else{bA.click()}
-  box.appendChild(card);
-}
-$('go').onclick=search;
-$('url').addEventListener('keydown',e=>{if(e.key==='Enter')search()});
+WEB_HTML = r"""<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="description" content="جلب كل صيغ وجودات الفيديو والصوت بسرعة"><title>yt fetch — كل الصيغ والجودات</title><style>
+:root{--bg:#080d19;--panel:#111a2d;--line:#233252;--text:#f2f6ff;--muted:#91a0bd;--brand:#6c8cff;--good:#86e0a5}*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 20% 0,#1c2f5c,var(--bg) 52%);color:var(--text);font-family:system-ui,-apple-system,Segoe UI,Tahoma,sans-serif}.wrap{max-width:980px;margin:auto;padding:26px 16px}.top{display:flex;justify-content:space-between;align-items:center;gap:12px}.brand{font-weight:800;font-size:1.2rem}.nav a{color:#a9b9ff;text-decoration:none;margin-inline-start:14px;font-size:.9rem}.hero{text-align:center;padding:42px 0 28px}.hero h1{font-size:clamp(2rem,6vw,4.3rem);line-height:1.05;margin:12px 0}.hero p{color:var(--muted);margin:0 auto 24px;max-width:600px}.search{display:flex;gap:8px;max-width:760px;margin:auto}.search input{flex:1;min-width:0;padding:15px 16px;border-radius:14px;border:1px solid var(--line);background:#0e1628;color:var(--text);font-size:1rem;direction:ltr;outline:none}.search input:focus{border-color:var(--brand);box-shadow:0 0 0 3px #6c8cff25}.btn{border:0;border-radius:12px;background:var(--brand);color:white;padding:12px 18px;cursor:pointer;font:inherit;font-weight:700}.btn:disabled{opacity:.55;cursor:wait}.btn.alt{background:#1b2946}.panel{background:rgba(17,26,45,.9);border:1px solid var(--line);border-radius:18px;padding:16px;margin-top:18px}.meta{display:flex;gap:14px;align-items:center}.meta img{width:120px;max-height:78px;object-fit:cover;border-radius:10px}.meta h2{margin:0;font-size:1.1rem}.muted{color:var(--muted);font-size:.9rem}.toolbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:18px 0 8px}.toolbar input,.toolbar select{background:#0c1425;color:var(--text);border:1px solid var(--line);border-radius:9px;padding:9px}.count{margin-inline-start:auto;color:var(--muted);font-size:.85rem}.row{display:flex;justify-content:space-between;align-items:center;gap:12px;border-top:1px solid var(--line);padding:11px 4px}.row small{display:block;color:var(--muted);font-size:.78rem}.msg{text-align:center;color:var(--muted);padding:20px}.err{color:#ff9b9b}.diagnostics{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-top:18px}.metric{padding:12px;background:#0d1628;border:1px solid var(--line);border-radius:12px}.metric strong{display:block}.foot{text-align:center;color:#64718b;font-size:.82rem;margin-top:28px}.hidden{display:none}@media(max-width:560px){.top{align-items:flex-start}.nav a{margin-inline-start:6px}.search{flex-direction:column}.search .btn{width:100%}.meta img{width:90px}.count{width:100%;margin:0}}</style></head><body><main class="wrap"><nav class="top"><span class="brand">yt fetch</span><span class="nav"><a href="/docs">التوثيق</a><a href="/repo" target="_blank">المستودع</a></span></nav><section class="hero"><div class="muted">كل الصيغ. كل الجودات. استجابة مقاسة.</div><h1>حمّل بدون تعقيد</h1><p>الصق الرابط وستظهر صيغ الفيديو والصوت المباشرة مع الامتداد والكودك والحجم.</p><div class="search"><input id="url" placeholder="https://..." autocomplete="off" inputmode="url"><button class="btn" id="go">جلب الصيغ</button></div></section><div id="res"></div><section class="diagnostics"><div class="metric"><strong id="ping">—</strong><span class="muted">ping</span></div><div class="metric"><strong id="repo">—</strong><span class="muted">نسخة المستودع</span></div><div class="metric"><strong id="stat">—</strong><span class="muted">متوسط الاستجابة</span></div></section><p class="foot">استخدم المحتوى الذي تملك حق تنزيله فقط. <a href="/encode">أداة كوكيز</a></p></main><script>
+const $=id=>document.getElementById(id), esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const mb=n=>n?(n/1048576).toFixed(n>10485760?0:1)+' MB':''; const msg=(t,c='')=>{$('res').innerHTML='<div class="panel msg '+c+'">'+esc(t)+'</div>'};
+async function json(url){const r=await fetch(url,{cache:'no-store'});const j=await r.json();if(!r.ok||j.ok===false)throw Error(j.error||'تعذر إكمال الطلب');return j}
+function show(d,url){const items=[...d.video,...d.audio], box=document.createElement('section');box.className='panel';box.innerHTML='<div class="meta">'+(d.thumbnail?'<img src="'+esc(d.thumbnail)+'" loading="lazy" referrerpolicy="no-referrer">':'')+'<div><h2>'+esc(d.title||'بدون عنوان')+'</h2><div class="muted">'+esc([d.uploader,d.extractor].filter(Boolean).join(' • '))+'</div></div></div><div class="toolbar"><input id="filter" placeholder="تصفية: mp4، 720p، audio"><select id="kind"><option value="all">كل الصيغ</option><option value="video">فيديو</option><option value="audio">صوت</option></select><span class="count" id="count"></span></div><div id="list"></div>';$('res').replaceChildren(box);const list=box.querySelector('#list'), filter=box.querySelector('#filter'), kind=box.querySelector('#kind');function render(){const q=filter.value.toLowerCase();const f=items.filter(o=>(kind.value==='all'||(kind.value==='video'?o.has_video&&!o.has_audio||o.has_video&&o.has_audio:!o.has_video))&&(!q||JSON.stringify(o).toLowerCase().includes(q)));box.querySelector('#count').textContent=f.length+' من '+items.length;list.innerHTML=f.length?'':'<div class="msg">لا توجد نتيجة</div>';f.forEach(o=>{const row=document.createElement('div');row.className='row';row.innerHTML='<div>'+esc(o.label)+'<small>'+esc([o.ext,(o.vcodec||o.acodec||''),o.size?mb(o.size):''].filter(Boolean).join(' • '))+'</small></div>';const b=document.createElement('button');b.className='btn alt';b.textContent='تنزيل';b.onclick=()=>{b.disabled=true;b.textContent='جاري…';const a=document.createElement('a');a.href='/web/dl?url='+encodeURIComponent(url)+'&fid='+encodeURIComponent(o.fid);a.click();setTimeout(()=>{b.disabled=false;b.textContent='تنزيل'},2000)};row.append(b);list.append(row)})}filter.oninput=render;kind.onchange=render;render()}
+async function search(){const u=$('url').value.trim();if(!/^https?:\/\//i.test(u))return msg('أدخل رابطاً يبدأ بـ http','err');$('go').disabled=true;msg('جاري جلب كل الصيغ…');const t=performance.now();try{const d=await json('/web/info?url='+encodeURIComponent(u));show(d,u);$('stat').textContent=Math.round(performance.now()-t)+' ms'}catch(e){msg(e.message,'err')}finally{$('go').disabled=false}}
+$('go').onclick=search;$('url').onkeydown=e=>e.key==='Enter'&&search();Promise.all([json('/ping'),json('/stats'),json('/repo')]).then(([p,s,r])=>{$('ping').textContent=p.latency_ms+' ms';$('stat').textContent=s.avg_ms+' ms';$('repo').textContent=r.commit||'—'}).catch(()=>{});
 </script></body></html>"""
