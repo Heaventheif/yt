@@ -1,19 +1,17 @@
 """نقاط النهاية (Routes) فقط. المنطق موزع على الوحدات:
 config · errors · net · formats · extractor · info_cache · streaming · serving · security · keepalive
 """
-import os
 import re
-import subprocess
 import threading
 import time
-from collections import OrderedDict
 from functools import wraps
 
 import yt_dlp
-from flask import Flask, Response, g, jsonify, request
+from flask import Flask, Response, jsonify, request
 
 import keepalive
-from config import CORS_ORIGIN, LINK_CACHE_MAX, LINK_CACHE_SEC, WARMUP, WEB_PUBLIC
+import observability
+from config import CORS_ORIGIN, WARMUP, WEB_PUBLIC
 from cookies_util import COOKIE_STATS
 from extractor import warmup
 from formats import get_fmt, info_payload, pick_fid
@@ -22,40 +20,16 @@ from pages import DOCS_HTML, ENCODE_HTML, WEB_HTML
 from responses import err, jerr
 from security import auth_ok, rate_ok
 from config import API_RATE_LIMIT
-from metrics import record, snapshot
 from serving import serve
-from url_utils import normalize_url
+from streaming import STATS
 from url_safety import is_public_url
+from url_utils import normalize_url
 
+observability.init()
 app = Flask(__name__)
+STARTED = time.time()
 
-# روابط yt-dlp المباشرة موقعة وقصيرة العمر؛ الاحتفاظ بها لفترة قصيرة يمنع
-# إعادة بناء نفس استجابة /link عندما يطلبها البوت أكثر من مرة خلال ثوانٍ.
-_link_cache = OrderedDict()
-_link_cache_lock = threading.Lock()
-
-
-def _cached_link(key):
-    now = time.time()
-    with _link_cache_lock:
-        item = _link_cache.get(key)
-        if not item:
-            return None
-        if item[0] <= now:
-            _link_cache.pop(key, None)
-            return None
-        _link_cache.move_to_end(key)
-        return item[1]
-
-
-def _store_link(key, value):
-    with _link_cache_lock:
-        _link_cache[key] = (time.time() + LINK_CACHE_SEC, value)
-        _link_cache.move_to_end(key)
-        while len(_link_cache) > LINK_CACHE_MAX:
-            _link_cache.popitem(last=False)
-
-PUBLIC_PATHS = ("/", "/health", "/ping", "/stats", "/repo", "/docs", "/encode")
+PUBLIC_PATHS = ("/", "/health", "/docs", "/encode")
 FID_PATTERN = re.compile(r"^[\w.\-+]+$")
 _HTTP_URL = re.compile(r"^https?://")
 
@@ -96,10 +70,6 @@ def _pick(url):
 
 # ------------------------- الحماية -------------------------
 @app.before_request
-def timing_start():
-    g.started_at = time.perf_counter()
-
-@app.before_request
 def guard():
     if request.method == "OPTIONS":  # طلب CORS التمهيدي لا يحمل المفتاح
         return Response(status=204)
@@ -118,11 +88,6 @@ def guard():
     if p in ("/info", "/link", "/stream") and not rate_ok(API_RATE_LIMIT):
         return jerr("طلبات كثيرة، انتظر دقيقة ثم حاول مجددا", 429)
 
-
-@app.after_request
-def collect_metrics(resp):
-    record(request.path, resp.status_code, time.perf_counter() - getattr(g, "started_at", time.perf_counter()))
-    return resp
 
 @app.after_request
 def cors(resp):
@@ -151,31 +116,8 @@ def encode_page():
 
 @app.get("/health")
 def health():
-    return jsonify(ok=True, yt_dlp=yt_dlp.version.__version__, service="ytdlp-api")
-
-@app.get("/ping")
-def ping():
-    started = time.perf_counter()
-    # لا نلمس المصدر الخارجي؛ هذا يقيس زمن استجابة التطبيق نفسه.
-    return jsonify(ok=True, latency_ms=round((time.perf_counter() - started) * 1000, 2),
-                   server_time=int(time.time()))
-
-@app.get("/stats")
-def stats():
-    return jsonify(snapshot())
-
-@app.get("/repo")
-def repo():
-    def run(*args):
-        try:
-            return subprocess.check_output(["git", *args], cwd=os.path.dirname(__file__),
-                                           text=True, stderr=subprocess.DEVNULL).strip()
-        except Exception:
-            return ""
-    return jsonify(ok=True, name="Heaventheif/yt", branch=run("branch", "--show-current"),
-                   commit=run("rev-parse", "--short", "HEAD"),
-                   updated=run("log", "-1", "--format=%cI"),
-                   url="https://github.com/Heaventheif/yt")
+    return jsonify(ok=True, yt_dlp=yt_dlp.version.__version__, uptime_s=int(time.time() - STARTED),
+                   active_downloads=STATS["active"], served_mb=STATS["bytes"] >> 20)
 
 
 @app.get("/cookies")
@@ -213,25 +155,11 @@ def api_info(url):
 @app.get("/link")
 @with_url()
 def api_link(url):
-    kind = request.args.get("type", "video").lower()
-    quality = request.args.get("q", "")
-    cache_key = (url, kind, quality)
-    cached = _cached_link(cache_key)
-    if cached:
-        response = jsonify(cached)
-        response.headers["X-Link-Cache"] = "HIT"
-        response.headers["Cache-Control"] = f"private, max-age={min(LINK_CACHE_SEC, 30)}"
-        return response
     info, fid = _pick(url)
     fmt = get_fmt(info, fid) if fid else None
     if not fmt:
         return jerr("لا توجد صيغة مناسبة", 404)
-    payload = {"ok": True, "title": info["title"], "ext": fmt.get("ext"), "url": fmt["url"]}
-    _store_link(cache_key, payload)
-    response = jsonify(payload)
-    response.headers["X-Link-Cache"] = "MISS"
-    response.headers["Cache-Control"] = f"private, max-age={min(LINK_CACHE_SEC, 30)}"
-    return response
+    return jsonify(ok=True, title=info["title"], ext=fmt.get("ext"), url=fmt["url"])
 
 
 @app.get("/stream")

@@ -41,7 +41,7 @@ const buf = Buffer.from(await res.arrayBuffer());
 
 ## المصادقة
 
-كل النقاط تحتاج المفتاح **عدا** `/health` و`/ping` و`/stats` و`/repo` والصفحات (`/`، `/docs`، `/encode`) ومسارات `/web/*`.
+كل النقاط تحتاج المفتاح **عدا** `/health` والصفحات (`/`، `/docs`، `/encode`) ومسارات `/web/*`.
 
 | الطريقة | مثال |
 |---|---|
@@ -59,9 +59,6 @@ const buf = Buffer.from(await res.arrayBuffer());
 | المسار | المفتاح | الوظيفة |
 |---|---|---|
 | `GET /health` | لا | فحص الخدمة + إصدار yt-dlp |
-| `GET /ping` | لا | زمن استجابة التطبيق بالمللي ثانية |
-| `GET /stats` | لا | الطلبات والأخطاء ومتوسط/P95 الاستجابة |
-| `GET /repo` | لا | الفرع وcommit ورابط المستودع |
 | `GET /info?url=` | نعم | العنوان والجودات المتاحة |
 | `GET /link?url=&type=&q=` | نعم | رابط مباشر من المصدر |
 | `GET /stream?url=&type=&q=` | نعم | تنزيل الملف عبر السيرفر (يدعم Range) |
@@ -87,20 +84,18 @@ const buf = Buffer.from(await res.arrayBuffer());
   "duration": 213,
   "thumbnail": "https://…/thumb.jpg",
   "video": [
-    { "fid": "22", "label": "720p • MP4 • فيديو + صوت", "size": 25431022, "height": 720, "ext": "mp4", "vcodec": "avc1", "acodec": "mp4a", "has_audio": true, "has_video": true },
-    { "fid": "137", "label": "1080p • MP4 • فيديو فقط", "size": null, "height": 1080, "ext": "mp4", "vcodec": "avc1", "acodec": "", "has_audio": false, "has_video": true }
+    { "fid": "22", "label": "720p • MP4", "size": 25431022, "height": 720 },
+    { "fid": "18", "label": "360p • MP4", "size": null,     "height": 360 }
   ],
   "audio": [
-    { "fid": "140", "label": "M4A • 129kbps", "size": 3401002, "height": 0, "ext": "m4a", "abr": 129, "vcodec": "", "acodec": "mp4a", "has_audio": true, "has_video": false }
+    { "fid": "140", "label": "M4A • 129kbps", "size": 3401002, "height": 0 }
   ]
 }
 ```
 
-- `video` مرتبة من الأعلى جودة وتضم **كل الصيغ المباشرة**، بما فيها صيغ الفيديو المنفصلة عن الصوت. `audio` تضم كل صيغ الصوت المباشرة مرتبة حسب bitrate، ويمكن تنزيلها عبر `type=audio`.
-- `size` بالبايت وقد تكون `null` إذا لم يعلنها المصدر.
+- `video` مرتبة من الأعلى جودة، وتحوي **الصيغ التي فيها صوت وصورة معا** فقط (قد تقل الخيارات عن الموقع الأصلي).
+- `size` بالبايت وقد تكون `null` إذا لم يُعلنها المصدر.
 - `fid` معرّف الصيغة، ويُستخدم مع `/web/dl`.
-- قد تتضمن الصيغة أيضا `resolution` و`fps` و`format_note` لتوضيح الجودة والكودك في الواجهة.
-- إذا كانت صيغة الفيديو منفصلة عن الصوت، فإن `/web/dl` و`/stream` يختاران أفضل صوت ويدمجان المسارين عبر `ffmpeg` تلقائيا.
 - النتيجة تُحفظ 20 دقيقة، فالطلب المتكرر لنفس الرابط فوري.
 
 ### `GET /link?url=URL&type=video|audio&q=720`
@@ -108,9 +103,6 @@ const buf = Buffer.from(await res.arrayBuffer());
 ```json
 { "ok": true, "title": "…", "ext": "mp4", "url": "https://rr1---sn-….googlevideo.com/videoplayback?…" }
 ```
-
-- الطلب الأول يجهّز الرابط من الكاش/المصدر، والطلبات المتكررة لنفس الرابط والنوع والجودة خلال فترة قصيرة تُعاد من كاش الذاكرة.
-- الهيدر `X-Link-Cache` يوضح الحالة (`MISS` أو `HIT`) للمراقبة، و`Cache-Control` يسمح للعميل بإعادة الاستخدام لمدة قصيرة.
 
 > ⚠️ الرابط موقّع لعنوان IP **السيرفر**. في يوتيوب غالبا يرفضه المصدر (403) إذا فتحته من جهاز آخر. لتنزيل موثوق استخدم `/stream`. في مواقع كثيرة أخرى يعمل الرابط المباشر من أي مكان.
 
@@ -375,10 +367,8 @@ interface InfoResponse {
   uploader: string | null;
   duration: number | null; // ثوان
   thumbnail: string | null;
-  video: FormatOption[];   // كل الصيغ المباشرة من الأعلى جودة
-  audio: FormatOption[];   // كل الصيغ المباشرة من الأعلى bitrate
-  format_count: number;
-  extractor?: string;
+  video: FormatOption[];   // من الأعلى جودة
+  audio: FormatOption[];   // من الأعلى bitrate
 }
 
 interface LinkResponse { ok: true; title: string | null; ext: string; url: string }

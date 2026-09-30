@@ -2,6 +2,7 @@
 لا يعتمد على Flask."""
 import re
 import threading
+import time
 from collections import namedtuple
 
 from config import CHUNK, MAX_DOWNLOADS, MAX_STREAM_FAILS, PER_IP_STREAMS, READ_SIZE, UPSTREAM_RETRIES, UPSTREAM_TIMEOUT
@@ -11,7 +12,9 @@ from url_safety import is_public_url
 
 DL_SLOTS = threading.Semaphore(MAX_DOWNLOADS)   # تنزيلات متزامنة (خفيفة)
 Upstream = namedtuple("Upstream", "resp total last ranged")
-STATS = {"bytes": 0, "active": 0}
+
+
+STATS = {"bytes": 0, "active": 0}   # للمراقبة في /health (تقريبي، يُصفَّر عند إعادة التشغيل)
 _ip_active = {}
 _ip_lock = threading.Lock()
 
@@ -45,7 +48,7 @@ class Slot:
 
 
 def acquire_slot(ip=None):
-    """يرجع Slot أو None عند امتلاء الخانات أو تجاوز حد IP."""
+    """يرجع Slot أو None إن كانت الخانات مشغولة (أو تجاوز ip حده المتزامن)"""
     if ip and PER_IP_STREAMS > 0:
         with _ip_lock:
             if _ip_active.get(ip, 0) >= PER_IP_STREAMS:
@@ -84,15 +87,18 @@ def open_upstream(fmt, cstart=0, cend=None):
         end = min(end, cend)
     if not is_public_url(fmt.get("url", "")):
         raise RuntimeError("مصدر الملف غير مسموح")
-    for attempt in range(UPSTREAM_RETRIES + 1):
+    for attempt in range(UPSTREAM_RETRIES + 1):   # تأخير تصاعدي: 0.5s ثم 1s
+        last_try = attempt == UPSTREAM_RETRIES
         try:
             r = _get_range(fmt, cstart, end)
         except Exception as e:
-            if attempt >= UPSTREAM_RETRIES:
+            if last_try:
                 raise RuntimeError("تعذر الاتصال بمصدر الملف: " + type(e).__name__)
+            time.sleep(0.5 * 2 ** attempt)
             continue
-        if r.status_code in (429, 500, 502, 503, 504) and attempt < UPSTREAM_RETRIES:
+        if r.status_code in (429, 500, 502, 503, 504) and not last_try:
             r.close()
+            time.sleep(0.5 * 2 ** attempt)
             continue
         break
     if r.status_code == 206:
@@ -149,8 +155,8 @@ def stream_gen(fmt, r, pos, last, ranged, slot):
             try:
                 for piece in r.iter_content(READ_SIZE):
                     if piece:
-                        STATS["bytes"] += len(piece)
                         got += len(piece)
+                        STATS["bytes"] += len(piece)
                         pos += len(piece)
                         yield piece
                         if ranged and prefetched is None and pos >= half and seg_end < last:

@@ -9,17 +9,29 @@ services:
         generateValue: true
       - key: COOKIES_B64
         sync: false
+      - key: SENTRY_DSN          # اختياري (يتطلب إضافة sentry-sdk إلى requirements.txt)
+        sync: false
       - key: ENABLE_POT
         value: "1"
       - key: AUTO_UPDATE
         value: "0"
       - key: WEB_PUBLIC
         value: "1"
-      - key: MAX_CONCURRENT
+      # --- الموارد (0.1 CPU / 512MB) ---
+      - key: THREADS             # يجب أن يتجاوز MAX_DOWNLOADS + طابور الاستخراج بهامش لـ /health
+        value: "24"
+      - key: MAX_CONCURRENT      # استخراج yt-dlp متزامن: 1 لأن CPU هو العنق
         value: "1"
+      - key: EXTRACT_QUEUE_MULTIPLIER
+        value: "2"
       - key: MAX_DOWNLOADS
-        value: "4"
-      - key: THREADS
-        value: "8"
-      - key: MAX_REQUESTS
-        value: "300"
+        value: "6"
+      # --- الأمان وحماية النطاق الترددي ---
+      - key: PER_IP_STREAMS
+        value: "2"
+      - key: MAX_FILE_MB
+        value: "500"
+      - key: DISABLE_GENERIC     # يمنع استخدام الخدمة كـ proxy لأي رابط مباشر (ضعها 0 إن احتجت روابط mp4 مباشرة)
+        value: "1"
+      - key: KEEP_ALIVE_MINUTES
+        value: "10"

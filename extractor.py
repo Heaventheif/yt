@@ -8,8 +8,9 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 import yt_dlp
 
 from config import (EXTRACT_QUEUE_MULTIPLIER, EXTRACT_WAIT_SEC, MAX_EXTRACT, PROBE_ENABLED, PROBE_TIMEOUT, PROXY,
-                    DISABLE_GENERIC, WARMUP_URL, YT_CLIENTS, YT_FALLBACKS)
+                    WARMUP_URL, YT_CLIENTS, YT_FALLBACKS)
 from cookies_util import COOKIES_PATH
+from config import DISABLE_GENERIC
 from errors import Busy
 from formats import collect_options, get_fmt
 from net import POOL, sess
@@ -19,9 +20,8 @@ from net import POOL, sess
 _EXTRACT_EXECUTOR = ThreadPoolExecutor(max_workers=max(1, MAX_EXTRACT), thread_name_prefix="extract")
 _EXTRACT_QUEUE = threading.BoundedSemaphore(max(1, MAX_EXTRACT) * (1 + EXTRACT_QUEUE_MULTIPLIER))
 OK_CODES = (200, 206)
-KEEP_FIELDS = ("format_id", "url", "ext", "protocol", "vcodec", "acodec", "height", "resolution",
-               "fps", "format_note", "language", "tbr", "abr", "filesize", "filesize_approx",
-               "http_headers")
+KEEP_FIELDS = ("format_id", "url", "ext", "protocol", "vcodec", "acodec", "height", "tbr", "abr",
+               "filesize", "filesize_approx", "http_headers")
 
 _last_good_client = None
 _last_good_at = 0.0
@@ -50,9 +50,7 @@ def slim(d):
 
 
 def ytdl_opts(clients=None):
-    # لا نتخطى DASH: صيغ يوتيوب التكيفية (خصوصا الصوت و1080p+) تأتي غالبا
-    # من DASH. تخطيها كان يجعل الواجهة تعرض صيغة progressive واحدة وصوتا صفرا.
-    yt_args = {"skip": ["hls", "translated_subs"]}
+    yt_args = {"skip": ["hls", "dash", "translated_subs"]}
     player_clients = YT_CLIENTS if clients is None else clients
     if player_clients:
         yt_args["player_client"] = player_clients
@@ -107,9 +105,9 @@ def extract_raw(url, clients=None):
 
 
 def warmup():
+    """تسخين عبر نفس الطابور المحدود، حتى لا يزاحم طلبات المستخدمين على 0.1 CPU."""
     try:
-        with yt_dlp.YoutubeDL(ytdl_opts()) as ydl:
-            ydl.extract_info(WARMUP_URL, download=False)
+        extract_raw(WARMUP_URL)
     except Exception:
         pass
 
@@ -187,10 +185,33 @@ def _raise_youtube_failure(code, err):
     raise RuntimeError(f"رفض يوتيوب روابط التنزيل (HTTP {code}). حدّث الكوكيز أو جرّب لاحقا")
 
 
+_TRANSIENT = ("timed out", "timeout", "connection reset", "connection aborted", "remote end closed",
+              "temporary failure", "http error 5", "http error 429", "too many requests")
+
+
+def _transient(e):
+    m = str(e).lower()
+    return any(k in m for k in _TRANSIENT)
+
+
+def _with_backoff(fn, tries=3, base=1.0):
+    """إعادة محاولة بتأخير تصاعدي (1s, 2s) للأخطاء العابرة فقط."""
+    for i in range(tries):
+        try:
+            return fn()
+        except Busy:
+            raise
+        except Exception as e:
+            if i == tries - 1 or not _transient(e):
+                raise
+            log(f"transient error, retry {i + 1} in {base * 2 ** i:.0f}s: {str(e)[:100]}")
+            time.sleep(base * 2 ** i)
+
+
 def smart_extract(url):
     if is_youtube(url):
         return _extract_youtube(url)
     t = time.time()
-    info = extract_raw(url)
+    info = _with_backoff(lambda: extract_raw(url))
     log(f"{info.get('extractor')} extract={time.time() - t:.1f}s")
     return info

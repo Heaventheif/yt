@@ -9,11 +9,11 @@ if [ "${ENABLE_POT:-1}" = "1" ]; then
   node /opt/bgutil/server/build/main.js &
 fi
 
-# عامل واحد مناسب للخطة الصغيرة؛ إعادة التدوير تمنع تراكم الذاكرة بعد طلبات كثيرة.
+# Worker واحد (0.1 CPU) + خيوط كافية: تنزيلات + طابور الاستخراج + /health دون تجويع.
+# --worker-tmp-dir /dev/shm: يمنع تجمد heartbeat على أقراص الحاويات البطيئة.
 exec gunicorn -b 0.0.0.0:${PORT:-10000} \
   -w ${WORKERS:-1} \
-  --threads ${THREADS:-8} \
-  --max-requests ${MAX_REQUESTS:-300} \
-  --max-requests-jitter ${MAX_REQUESTS_JITTER:-60} \
+  --threads ${THREADS:-24} \
+  --worker-tmp-dir /dev/shm \
   --timeout 120 --graceful-timeout 30 --keep-alive 10 \
   app:app

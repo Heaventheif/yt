@@ -8,9 +8,8 @@ import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-os.environ.update(API_KEY="k", WARMUP="0", WEB_PUBLIC="1", RATE_LIMIT_PER_MIN="4",
-                  CHUNK_MB="0.25", KEEP_ALIVE_MINUTES="0", COOKIES_B64="", CORS_ORIGIN="https://example.com",
-                  ALLOW_PRIVATE_URLS="1")
+os.environ.update(API_KEY="k", ALLOW_PRIVATE_URLS="1", WARMUP="0", WEB_PUBLIC="1", RATE_LIMIT_PER_MIN="4",
+                  CHUNK_MB="0.25", KEEP_ALIVE_MINUTES="0", COOKIES_B64="", CORS_ORIGIN="https://example.com")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 DATA = bytes((i * 31 + 7) % 256 for i in range(700_003))  # ~3 أجزاء بحجم 0.25MB
@@ -126,18 +125,6 @@ class ApiTest(unittest.TestCase):
         self.assertTrue(j["ok"])
         self.assertEqual(j["url"], self.src)
         self.assertEqual(j["ext"], "mp4")
-
-    def test_link_uses_short_lived_response_cache(self):
-        import app
-        app._link_cache.clear()
-        path = f"/link?url={self.src}&type=video&q=360"
-        first = self.get(path)
-        second = self.get(path)
-        self.assertEqual(first.status_code, 200)
-        self.assertEqual(first.headers["X-Link-Cache"], "MISS")
-        self.assertEqual(second.status_code, 200)
-        self.assertEqual(second.headers["X-Link-Cache"], "HIT")
-        self.assertEqual(first.json, second.json)
 
     def test_link_audio_missing(self):
         r = self.get(f"/link?url={self.src}&type=audio")
