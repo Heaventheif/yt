@@ -29,8 +29,7 @@ COPY --from=nodebuild /usr/local/bin/node /usr/local/bin/node
 COPY --from=nodebuild /opt/bgutil/server /opt/bgutil/server
 COPY --from=pybuild /opt/venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH" \
-    PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 \
-    NODE_OPTIONS=--max-old-space-size=128
+    PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
 
 WORKDIR /app
 COPY *.py start.sh ./

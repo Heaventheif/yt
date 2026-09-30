@@ -1,6 +1,9 @@
 #!/bin/sh
 set -e
 
+# سقف ذاكرة node (يرثه سيرفر PO Token وعملية حل تحدي n لـ yt-dlp). 128 سبّب انهيار الحل بـ OOM.
+export NODE_OPTIONS="--max-old-space-size=${NODE_HEAP_MB:-192}"
+
 if [ "${AUTO_UPDATE:-0}" = "1" ]; then
   pip install -q -U "yt-dlp[default]" || true
 fi
