@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: ytdlp-api
+    runtime: docker
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: API_KEY
+        generateValue: true
+      - key: COOKIES_B64
+        sync: false
+      - key: ENABLE_POT
+        value: "1"
+      - key: AUTO_UPDATE
+        value: "1"
+      - key: MAX_CONCURRENT
+        value: "2"
