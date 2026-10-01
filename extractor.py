@@ -262,3 +262,35 @@ def smart_extract(url):
     info = _with_backoff(lambda: extract_raw(url))
     log(f"{info.get('extractor')} extract={time.time() - t:.1f}s")
     return info
+
+
+def _run_playlist(list_id, start, limit):
+    try:
+        opts = ytdl_opts(cookies=False)
+        opts.update({"noplaylist": False, "extract_flat": "in_playlist", "playlist_items": f"{start + 1}-{start + limit}",
+                     "ignore_no_formats_error": True})
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            d = ydl.extract_info(f"https://www.youtube.com/playlist?list={list_id}", download=False)
+        entries = [e for e in (d.get("entries") or []) if e and e.get("id")]
+        return {"title": d.get("title"), "count": d.get("playlist_count"),
+                "items": [{"id": e["id"], "title": e.get("title"), "duration": e.get("duration"),
+                           "uploader": e.get("uploader") or e.get("channel")} for e in entries]}
+    finally:
+        _EXTRACT_QUEUE.release()
+
+
+def extract_playlist(list_id, start, limit):
+    """صفحة من قائمة تشغيل عبر نفس الطابور المحدود (استخراج مسطّح بلا صيغ)."""
+    if not _EXTRACT_QUEUE.acquire(timeout=EXTRACT_WAIT_SEC):
+        raise Busy("الخادم مشغول بطلبات استخراج أخرى، حاول بعد قليل")
+    try:
+        future = _EXTRACT_EXECUTOR.submit(_run_playlist, list_id, start, limit)
+    except Exception:
+        _EXTRACT_QUEUE.release()
+        raise
+    try:
+        return future.result(timeout=max(30, EXTRACT_WAIT_SEC + 30))
+    except FutureTimeout:
+        if future.cancel():
+            _EXTRACT_QUEUE.release()
+        raise Busy("استغرق جلب القائمة وقتا أطول من المسموح، حاول مجددا")

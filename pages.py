@@ -46,7 +46,9 @@ async function call(path){ $('out').textContent='جارٍ التنفيذ…';
  try{const r=await fetch(B+path+'?'+P(),{headers:{'X-API-Key':$('key').value}});
  $('out').textContent=JSON.stringify(await r.json(),null,2)}catch(e){$('out').textContent=e}}
 const info=()=>call('/info'), lnk=()=>call('/link');
-function dl(){location.href=B+'/stream?'+P()+'&key='+encodeURIComponent($('key').value)}
+async function dl(){$('out').textContent='جارٍ التنزيل…';try{const r=await fetch(B+'/stream?'+P(),{headers:{'X-API-Key':$('key').value}});
+ if(!r.ok){$('out').textContent=JSON.stringify(await r.json(),null,2);return}
+ const a=document.createElement('a');a.href=URL.createObjectURL(await r.blob());a.download='download';a.click();$('out').textContent='تم'}catch(e){$('out').textContent=e}}
 $('ex').textContent=`curl -H "X-API-Key: YOUR_KEY" "${B}/info?url=https://youtu.be/VIDEO_ID"\n\ncurl -H "X-API-Key: YOUR_KEY" -o video.mp4 "${B}/stream?url=https://youtu.be/VIDEO_ID&q=480"`;
 $('ex2').textContent=`const res = await fetch("${B}/stream?url=" + encodeURIComponent(url) + "&type=video&q=480",\n  { headers: { "X-API-Key": process.env.YTDLP_KEY } });\nif (!res.ok) throw new Error((await res.json()).error);\nconst buf = Buffer.from(await res.arrayBuffer());`;
 </script></body></html>"""
@@ -105,122 +107,4 @@ function run(){
 async function cp(){const v=$('out').value;if(!v)return;try{await navigator.clipboard.writeText(v)}catch(e){$('out').select();document.execCommand('copy')}$('info').innerHTML+=' — <span class="ok">تم النسخ</span>'}
 function dec(){const v=$('out').value;if(!v)return;const c=$('chk');c.style.display='block';
   try{c.textContent=new TextDecoder().decode(Uint8Array.from(atob(v),x=>x.charCodeAt(0))).split('\n').slice(0,3).map(l=>l.replace(/\t.*\t/,'\t…\t')).join('\n')}catch(e){c.textContent='فشل الفك'}}
-</script></body></html>"""
-
-
-WEB_HTML = r"""<!doctype html>
-<html lang="ar" dir="rtl"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>تنزيل الفيديو والصوت</title>
-<style>
-*{box-sizing:border-box}
-body{font-family:system-ui,-apple-system,"Segoe UI",Tahoma,sans-serif;background:#0f1115;color:#eee;margin:0;padding:24px 14px;line-height:1.6}
-.wrap{max-width:680px;margin:0 auto}
-h1{font-size:1.5rem;margin:0 0 4px;text-align:center}
-.sub{text-align:center;color:#9aa;margin:0 0 18px;font-size:.9rem}
-.bar{display:flex;gap:8px}
-.bar input{flex:1;min-width:0;padding:14px;border-radius:12px;border:1px solid #333;background:#1a1d24;color:#eee;font-size:1rem;direction:ltr}
-button,.btn{cursor:pointer;border:0;border-radius:12px;background:#2b6cff;color:#fff;padding:12px 18px;font:inherit;text-decoration:none;display:inline-block;white-space:nowrap}
-button:disabled{opacity:.6;cursor:wait}
-.msg{text-align:center;color:#9aa;margin:18px 0}
-.err{color:#ff7b7b}
-.card{background:#1a1d24;border-radius:14px;padding:14px;margin-top:16px}
-.head{display:flex;gap:12px;align-items:flex-start}
-.head img{width:120px;max-width:38%;border-radius:10px;flex-shrink:0}
-.head h3{margin:0 0 4px;font-size:1rem;word-break:break-word}
-.head small{color:#9aa}
-.tabs{display:flex;gap:8px;margin:14px 0 6px}
-.tabs button{flex:1;background:#262a33}
-.tabs button.on{background:#2b6cff}
-.row{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:10px 4px;border-top:1px solid #2a2e38}
-.row span small{color:#9aa;margin-inline-start:8px}
-.note{color:#ff9d9d;font-size:.9rem;margin-top:10px;word-break:break-word}
-.note a{color:#7fb0ff}
-.note.okc{color:#8fdc9f}
-.foot{text-align:center;color:#667;font-size:.8rem;margin-top:24px}
-</style></head><body><div class="wrap">
-<h1>تنزيل الفيديو والصوت</h1>
-<p class="sub">الصق الرابط، اختر الصيغة والجودة، ثم نزّل</p>
-<div class="bar">
-  <input id="url" placeholder="https://..." autocomplete="off" inputmode="url">
-  <button id="go">بحث</button>
-</div>
-<div id="res"></div>
-<p class="foot">للاستخدام الشخصي فقط. تأكد من حقك في تنزيل المحتوى.</p>
-</div>
-<script>
-const $=id=>document.getElementById(id);
-function el(t,c,txt){const e=document.createElement(t);if(c)e.className=c;if(txt!=null)e.textContent=txt;return e}
-function dur(s){if(!s)return'';s=Math.round(s);const h=Math.floor(s/3600),m=Math.floor(s%3600/60),x=s%60;
-  return (h?h+':'+String(m).padStart(2,'0'):m)+':'+String(x).padStart(2,'0')}
-function mb(n){return n?(n/1048576).toFixed(n>10485760?0:1)+' MB':''}
-function msg(t,cls){const b=$('res');b.innerHTML='';b.appendChild(el('p','msg '+(cls||''),t))}
-
-async function jget(u){
-  let r;
-  try{r=await fetch(u)}catch(e){throw new Error('تعذر الاتصال بالخدمة')}
-  let j=null;try{j=await r.json()}catch(e){}
-  if(!j)throw new Error(r.status>=500?'الخدمة غير متاحة الآن ('+r.status+')، انتظر دقيقة ثم أعد المحاولة':'ردّ غير متوقع من الخدمة');
-  return j;
-}
-
-async function search(){
-  const url=$('url').value.trim();
-  if(!/^https?:\/\//i.test(url)){msg('الصق رابطاً صحيحاً يبدأ بـ http','err');return}
-  msg('جارٍ التحليل… (قد يستغرق أول طلب دقيقة إن كانت الخدمة نائمة)');
-  $('go').disabled=true;
-  try{
-    const d=await jget('/web/info?url='+encodeURIComponent(url));
-    if(!d.ok)throw new Error(d.error||'فشل جلب المعلومات');
-    render(d,url);
-  }catch(e){msg(e.message,'err')}
-  $('go').disabled=false;
-}
-
-async function start(o,btn,url,note){
-  const old=btn.textContent;btn.disabled=true;btn.textContent='جارٍ التحضير…';note.className='note';note.textContent='';
-  const q='url='+encodeURIComponent(url)+'&fid='+encodeURIComponent(o.fid);
-  try{
-    const j=await jget('/web/dl?'+q+'&check=1');
-    if(!j.ok)throw new Error(j.error||'فشل التحضير');
-    const a=document.createElement('a');a.href='/web/dl?'+q;document.body.appendChild(a);a.click();a.remove();
-    btn.textContent='بدأ التنزيل ✓';
-    note.className='note okc';note.textContent='بدأ التنزيل — إن لم يبدأ ';
-    const l=el('a',null,'اضغط هنا');l.href='/web/dl?'+q;note.appendChild(l);
-    setTimeout(()=>{btn.textContent=old;btn.disabled=false},5000);
-  }catch(e){btn.textContent=old;btn.disabled=false;note.textContent=e.message}
-}
-
-function render(d,url){
-  const box=$('res');box.innerHTML='';
-  const card=el('div','card');
-  const head=el('div','head');
-  if(d.thumbnail){const im=el('img');im.src=d.thumbnail;im.referrerPolicy='no-referrer';head.appendChild(im)}
-  const meta=el('div');
-  meta.appendChild(el('h3',null,d.title||'بدون عنوان'));
-  meta.appendChild(el('small',null,[d.uploader,dur(d.duration)].filter(Boolean).join(' • ')));
-  head.appendChild(meta);card.appendChild(head);
-
-  const tabs=el('div','tabs'),list=el('div'),note=el('div','note');
-  const bV=el('button','on','فيديو ('+d.video.length+')'),bA=el('button',null,'صوت ('+d.audio.length+')');
-  tabs.appendChild(bV);tabs.appendChild(bA);card.appendChild(tabs);card.appendChild(list);card.appendChild(note);
-
-  function show(items){
-    list.innerHTML='';
-    if(!items.length){list.appendChild(el('p','msg','لا توجد صيغ متاحة في هذا القسم'));return}
-    items.forEach(o=>{
-      const row=el('div','row'),sp=el('span',null,o.label);
-      if(o.size)sp.appendChild(el('small',null,mb(o.size)));
-      const b=el('button',null,'تنزيل');
-      b.onclick=()=>start(o,b,url,note);
-      row.appendChild(sp);row.appendChild(b);list.appendChild(row);
-    });
-  }
-  bV.onclick=()=>{bV.className='on';bA.className='';show(d.video)};
-  bA.onclick=()=>{bA.className='on';bV.className='';show(d.audio)};
-  if(d.video.length||!d.audio.length)show(d.video);else{bA.click()}
-  box.appendChild(card);
-}
-$('go').onclick=search;
-$('url').addEventListener('keydown',e=>{if(e.key==='Enter')search()});
 </script></body></html>"""

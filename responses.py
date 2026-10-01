@@ -5,8 +5,11 @@ from errors import Busy, HttpFailure, clean_message
 from observability import capture, log_error
 
 
-def jerr(msg, code=502):
-    return jsonify(ok=False, error=msg), code
+def jerr(msg, code=502, retry_after=None):
+    resp = jsonify(ok=False, error=msg)
+    if code == 429:   # كل ردود 429 تحمل Retry-After ليتصرف العميل بذكاء
+        resp.headers["Retry-After"] = str(retry_after or 30)
+    return resp, code
 
 
 def err(e):

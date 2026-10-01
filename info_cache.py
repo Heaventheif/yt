@@ -1,13 +1,14 @@
 """كاش نتائج الاستخراج + single-flight حقيقي باستخدام Future."""
+import json
 import threading
 import time
 from collections import OrderedDict
 from concurrent.futures import Future
 
-from config import (CACHE_MAX, CACHE_TTL, ERROR_CACHE_SEC, MAX_CACHED_ERRORS,
+from config import (CACHE_MAX, CACHE_TTL, ERROR_CACHE_SEC, INFO_CACHE_MAX_BYTES, MAX_CACHED_ERRORS,
                     MAX_REMEMBERED_ORIGINALS)
 from errors import Busy, clean_message
-from extractor import smart_extract
+from extractor import extract_playlist, smart_extract
 
 
 class TTLCache:
@@ -33,7 +34,47 @@ class TTLCache:
                 self._items.popitem(last=False)
 
 
-_cache = TTLCache(CACHE_TTL, CACHE_MAX)
+class ByteTTLCache(TTLCache):
+    """TTL + LRU بسقف بالبايت (الذاكرة 512MB، لا نعتمد على عدد العناصر فقط)."""
+
+    def __init__(self, ttl, max_items, max_bytes):
+        super().__init__(ttl, max_items)
+        self._max_bytes = max_bytes
+        self._bytes = 0
+
+    @property
+    def bytes(self):
+        return self._bytes
+
+    def _drop(self, key):
+        item = self._items.pop(key, None)
+        if item:
+            self._bytes -= item[2]
+        return item
+
+    def get(self, key):
+        with self._lock:
+            item = self._items.get(key)
+            if item and time.time() - item[0] < self._ttl:
+                self._items.move_to_end(key)
+                return item[1]
+            self._drop(key)
+        return None
+
+    def put(self, key, value):
+        size = len(json.dumps(value, separators=(",", ":"), default=str))
+        with self._lock:
+            self._drop(key)
+            self._items[key] = (time.time(), value, size)
+            self._bytes += size
+            while self._items and (len(self._items) > self._max or self._bytes > self._max_bytes):
+                oldest = next(iter(self._items))
+                if oldest == key and len(self._items) == 1:
+                    break
+                self._drop(oldest)
+
+
+_cache = ByteTTLCache(CACHE_TTL, CACHE_MAX, INFO_CACHE_MAX_BYTES)
 _errors = {}
 _inflight = {}  # url -> Future: كل الطلبات لنفس الرابط تشترك في استخراج واحد
 _originals = {}
@@ -127,3 +168,16 @@ def get_info(url, fresh=False):
 
     # fresh يتجاهل الكاش القديم، لكنه لا يتجاوز extraction جاريا بالفعل.
     return future.result()
+
+
+_playlists = TTLCache(300, 60)
+
+
+def get_playlist(list_id, start, limit):
+    key = (list_id, start, limit)
+    hit = _playlists.get(key)
+    if hit:
+        return hit
+    page = extract_playlist(list_id, start, limit)
+    _playlists.put(key, page)
+    return page

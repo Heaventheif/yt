@@ -103,9 +103,13 @@ class ApiTest(unittest.TestCase):
         self.assertEqual(r.status_code, 204)
         self.assertEqual(r.headers["Access-Control-Allow-Origin"], "https://example.com")
         self.assertIn("X-API-Key", r.headers["Access-Control-Allow-Headers"])
-        r = self.get(f"/info?url={self.src}")
+        r = self.get(f"/info?url={self.src}", headers={"Origin": "https://example.com"})
         self.assertEqual(r.headers["Access-Control-Allow-Origin"], "https://example.com")
+        self.assertIn("Vary", r.headers)
         self.assertIn("Content-Disposition", r.headers["Access-Control-Expose-Headers"])
+        # أصل غير مسموح أو بلا Origin: لا هيدرات CORS
+        self.assertNotIn("Access-Control-Allow-Origin", self.get(f"/info?url={self.src}", headers={"Origin": "https://evil.test"}).headers)
+        self.assertNotIn("Access-Control-Allow-Origin", self.get(f"/info?url={self.src}").headers)
 
     # ---- info / link ----
     def test_info_and_cache(self):

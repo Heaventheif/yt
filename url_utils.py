@@ -117,6 +117,53 @@ def _youtube(host, path, query):
     return None
 
 
+_TEXT_URL = re.compile(r"(?:https?|intent)://[^\s<>\"']+|vnd\.youtube:[^\s<>\"']+", re.I)
+_YT_APP = re.compile(r"^vnd\.youtube:(?://)?([\w-]{6,})", re.I)
+
+
+def _wrapped_target(url):
+    """رابط داخل رابط (تحويلات جوجل/يوتيوب/فيسبوك، vnd.youtube، intent://) -> الهدف أو None"""
+    m = _YT_APP.match(url)
+    if m:
+        return f"https://www.youtube.com/watch?v={m.group(1)}"
+    if url.lower().startswith("intent://"):
+        body = url[len("intent://"):].split("#Intent", 1)[0]
+        return "https://" + body if body else None
+    try:
+        sp = urlsplit(url)
+        host = (sp.hostname or "").lower()
+    except ValueError:
+        return None
+    q = dict(parse_qsl(sp.query))
+    if (host.startswith(("www.google.", "google.")) and sp.path == "/url") and (q.get("q") or q.get("url")):
+        return q.get("q") or q.get("url")
+    if host.endswith("youtube.com") and sp.path == "/redirect" and q.get("q"):
+        return q["q"]
+    if host.endswith("youtube.com") and sp.path == "/attribution_link" and q.get("u", "").startswith("/"):
+        return "https://www.youtube.com" + q["u"]
+    if host.endswith("facebook.com") and sp.path.startswith("/l.php") and q.get("u"):
+        return q["u"]
+    return None
+
+
+def unwrap_url(raw):
+    """يستخرج أول رابط من نص حر (مشاركة الجوال) ويفك التحويلات المتداخلة (حتى 3 مستويات)."""
+    text = (raw or "").strip()
+    if not text:
+        return text
+    if re.search(r"\s", text):
+        m = _TEXT_URL.search(text)
+        if not m:
+            return text
+        text = m.group(0).rstrip(".,;)!?")
+    for _ in range(3):
+        target = _wrapped_target(text)
+        if not target:
+            break
+        text = target
+    return text
+
+
 def normalize_url(raw, check_dns=True, add_www=True):
     """يرجع الرابط بصيغته القياسية، وإن لم يكن رابطا صالحا يرجعه كما هو."""
     if not raw:

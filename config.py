@@ -66,3 +66,16 @@ MAX_MERGES = max(1, int(os.getenv("MAX_MERGES", "1")))  # عمليات ffmpeg م
 # ---- تحويل MP3 (ffmpeg libmp3lame) ----
 MP3_ENABLED = os.getenv("MP3_ENABLED", "1") == "1"
 MP3_BITRATES = sorted({int(x) for x in os.getenv("MP3_BITRATES", "128,192").split(",") if x.strip().isdigit()}, reverse=True)
+
+# ---- ترقية: أمان وأداء وكاش (جديد) ----
+ALLOW_KEY_QUERY = os.getenv("ALLOW_KEY_QUERY", "1") == "1"      # 0 = المفتاح بالهيدر فقط (موصى به في الإنتاج)
+DL_RATE_LIMIT = int(os.getenv("DL_RATE_LIMIT_PER_MIN", "20"))   # طلبات /web/dl لكل IP في الدقيقة
+THUMB_RATE_LIMIT = int(os.getenv("THUMB_RATE_LIMIT_PER_MIN", "120"))
+INFO_CACHE_MAX_BYTES = int(float(os.getenv("INFO_CACHE_MAX_MB", "24")) * 1048576)   # سقف كاش الاستخراج بالبايت
+INFO_MAX_AGE = int(os.getenv("INFO_MAX_AGE_SEC", "60"))         # Cache-Control لـ /web/info
+MAX_URL_LEN = 2048
+MAX_FID_LEN = 40
+THUMB_MAX_BYTES = 600 * 1024
+PLAYLIST_MAX_LIMIT = 50
+CORS_ORIGINS = [o.strip().rstrip("/") for o in CORS_ORIGIN.split(",") if o.strip()]   # قائمة أصول مسموحة (أو *)
+TELEMETRY_ENABLED = os.getenv("TELEMETRY_ENABLED", "1") == "1"

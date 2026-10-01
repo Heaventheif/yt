@@ -4,13 +4,13 @@ import time
 from flask import request
 import hmac
 
-from config import API_KEY, MAX_TRACKED_IPS, RATE_LIMIT, RATE_WINDOW_SEC, TRUSTED_PROXY_HOPS
+from config import ALLOW_KEY_QUERY, API_KEY, MAX_TRACKED_IPS, RATE_LIMIT, RATE_WINDOW_SEC, TRUSTED_PROXY_HOPS
 
 
 def auth_ok():
     if not API_KEY:
         return True
-    supplied = request.headers.get("X-API-Key") or request.args.get("key") or ""
+    supplied = request.headers.get("X-API-Key") or (request.args.get("key") if ALLOW_KEY_QUERY else "") or ""
     return hmac.compare_digest(supplied.encode(), API_KEY.encode())
 
 
@@ -26,11 +26,11 @@ _hits = {}
 _hits_lock = threading.Lock()
 
 
-def rate_ok(limit=None):
-    """يحد الطلبات لكل IP، ويمكن تمرير حد مختلف حسب نوع المسار."""
+def rate_ok(limit=None, bucket="web"):
+    """يحد الطلبات لكل IP داخل سلّة مستقلة (web/api/dl/thumb/tele) كي لا يستهلك نوعٌ حصةَ نوع آخر."""
     limit = RATE_LIMIT if limit is None else limit
     now = time.time()
-    ip = client_ip()
+    ip = f"{bucket}|{client_ip()}"
     with _hits_lock:
         if len(_hits) >= MAX_TRACKED_IPS:
             stale = [k for k, ts in _hits.items() if not ts or now - ts[-1] >= RATE_WINDOW_SEC]

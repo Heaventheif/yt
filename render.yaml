@@ -39,3 +39,12 @@ services:
         value: "1"
       - key: MP3_BITRATES        # معدلات تحويل MP3 المعروضة
         value: "128,192"
+      # --- ترقية الأمان والكاش ---
+      - key: TRUSTED_PROXY_HOPS   # Render يضيف عنوان العميل في آخر X-Forwarded-For؛ 0 يسمح بتزوير الحد
+        value: "1"
+      - key: ALLOW_KEY_QUERY      # 0 = المفتاح بالهيدر فقط (لا يظهر في السجلات). فعّله فقط لبوتات قديمة تستخدم ?key=
+        value: "0"
+      - key: DL_RATE_LIMIT_PER_MIN
+        value: "20"
+      - key: INFO_CACHE_MAX_MB    # كاش الاستخراج بالبايت (الذاكرة 512MB)
+        value: "24"

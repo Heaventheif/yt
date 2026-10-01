@@ -135,8 +135,9 @@ def serve(url, fid, check=False, per_ip=False):
     mp3 = get_mp3_job(info, fid) if "+" in fid else None
     if "+" in fid and not (pair or mp3) or ("+" in fid and not merge.available()):
         return jerr("الدمج/التحويل غير متاح لهذه الصيغة، أعد البحث عن الرابط", 404)
-    cstart, cend = (0, None) if (check or pair or mp3) else _requested_range()
-    cstart, cend = (0, None) if (check or pair) else _requested_range()
+    # الدمج وMP3 لا يدعمان Range؛ If-Range بلا مُصادِق مصدر => نرسل الملف كاملا (سلوك RFC 9110 الآمن)
+    full = check or pair or mp3 or bool(request.headers.get("If-Range"))
+    cstart, cend = (0, None) if full else _requested_range()
 
     slot = acquire_slot(client_ip() if per_ip else None)
     if slot is None:

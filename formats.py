@@ -225,3 +225,19 @@ def info_payload(info, allow_merge=True):
     return {"ok": True, "title": info["title"], "uploader": info["uploader"],
             "duration": info["duration"], "thumbnail": info["thumbnail"],
             "video": video, "audio": audio}
+
+
+def detail_options(info):
+    """كل الصيغ المباشرة بلا دمج أو تجميع (للوضع المتقدم): الحاوية والترميز والإطارات والحجم.
+    fid هنا هو معرّف الصيغة الخام؛ الصيغ المنفصلة تُنزَّل كما هي (فيديو بلا صوت أو صوت فقط)."""
+    rows = []
+    for f in info.get("formats", []):
+        if not _is_direct(f) or not f.get("format_id"):
+            continue
+        v, a = _has_video(f), _has_audio(f)
+        rows.append({"fid": f["format_id"], "kind": "av" if v and a else ("video" if v else "audio"),
+                     "height": f.get("height") or 0, "fps": int(f.get("fps") or 0), "container": f.get("ext") or "",
+                     "codec": _codec(f) or (f.get("acodec") or "").split(".")[0], "tbr": int(f.get("tbr") or 0),
+                     "size": _size(f)})
+    rows.sort(key=lambda r: (r["kind"] == "audio", -r["height"], -r["fps"], -r["tbr"]))
+    return rows

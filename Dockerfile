@@ -33,6 +33,7 @@ ENV PATH="/opt/venv/bin:$PATH" \
 
 WORKDIR /app
 COPY *.py start.sh ./
+COPY static ./static
 RUN chmod +x start.sh
 USER app
 CMD ["./start.sh"]
