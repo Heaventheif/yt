@@ -10,6 +10,7 @@ import yt_dlp
 from config import (EXTRACT_QUEUE_MULTIPLIER, EXTRACT_WAIT_SEC, MAX_EXTRACT, PROBE_ENABLED, PROBE_TIMEOUT, PROXY,
                     WARMUP_URL, YT_CLIENTS, YT_FALLBACKS)
 from cookies_util import COOKIES_PATH
+from config import DISABLE_GENERIC
 from errors import Busy
 from formats import collect_options, get_fmt
 from net import POOL, sess
@@ -20,7 +21,7 @@ _EXTRACT_EXECUTOR = ThreadPoolExecutor(max_workers=max(1, MAX_EXTRACT), thread_n
 _EXTRACT_QUEUE = threading.BoundedSemaphore(max(1, MAX_EXTRACT) * (1 + EXTRACT_QUEUE_MULTIPLIER))
 OK_CODES = (200, 206)
 KEEP_FIELDS = ("format_id", "url", "ext", "protocol", "vcodec", "acodec", "height", "tbr", "abr",
-               "filesize", "filesize_approx", "http_headers")
+               "filesize", "filesize_approx", "http_headers", "fps")
 
 _last_good_client = None
 _last_good_at = 0.0
@@ -57,6 +58,8 @@ def ytdl_opts(clients=None):
             "socket_timeout": 20, "retries": 2, "js_runtimes": {"node": {}},
             "ignore_no_formats_error": True, "check_formats": False, "extractor_retries": 1,
             "extractor_args": {"youtube": yt_args}}
+    if DISABLE_GENERIC:
+        opts["allowed_extractors"] = ["default", "-generic"]
     if os.path.exists(COOKIES_PATH):
         opts["cookiefile"] = COOKIES_PATH
     if PROXY:
@@ -64,10 +67,34 @@ def ytdl_opts(clients=None):
     return opts
 
 
+class _Collect:
+    """يلتقط تحذيرات/أخطاء yt-dlp (كانت مكتومة بـ no_warnings) لتظهر في السجل عند غياب الصيغ."""
+
+    def __init__(self):
+        self.msgs = []
+
+    def debug(self, m):
+        pass
+
+    info = debug
+
+    def warning(self, m):
+        if len(self.msgs) < 30:
+            self.msgs.append(str(m)[:220])
+
+    error = warning
+
+
 def _run_extract(url, clients=None):
     try:
-        with yt_dlp.YoutubeDL(ytdl_opts(clients)) as ydl:
-            return slim(ydl.extract_info(url, download=False))
+        col = _Collect()
+        opts = ytdl_opts(clients)
+        opts["logger"] = col
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = slim(ydl.extract_info(url, download=False))
+        if not info["formats"] and col.msgs:
+            log("yt-dlp returned NO formats; messages:", " | ".join(col.msgs[-6:]))
+        return info
     finally:
         _EXTRACT_QUEUE.release()
 
@@ -102,9 +129,9 @@ def extract_raw(url, clients=None):
 
 
 def warmup():
+    """تسخين عبر نفس الطابور المحدود، حتى لا يزاحم طلبات المستخدمين على 0.1 CPU."""
     try:
-        with yt_dlp.YoutubeDL(ytdl_opts()) as ydl:
-            ydl.extract_info(WARMUP_URL, download=False)
+        extract_raw(WARMUP_URL)
     except Exception:
         pass
 
@@ -162,6 +189,10 @@ def _extract_youtube(url):
             first_err = first_err or e
             continue
         t1 = time.time()
+        video, audio = collect_options(info)
+        if not (video or audio):   # نتيجة بلا صيغ مباشرة ليست نجاحاً: جرّب العميل التالي
+            log(f"youtube client={name} returned no direct formats (total={len(info.get('formats', []))})")
+            continue
         code = probe(info) if PROBE_ENABLED else 200
         log(f"youtube client={name} extract={t1 - t0:.1f}s probe={time.time() - t1:.1f}s "
             f"formats={len(info.get('formats', []))} http={code}")
@@ -182,10 +213,33 @@ def _raise_youtube_failure(code, err):
     raise RuntimeError(f"رفض يوتيوب روابط التنزيل (HTTP {code}). حدّث الكوكيز أو جرّب لاحقا")
 
 
+_TRANSIENT = ("timed out", "timeout", "connection reset", "connection aborted", "remote end closed",
+              "temporary failure", "http error 5", "http error 429", "too many requests")
+
+
+def _transient(e):
+    m = str(e).lower()
+    return any(k in m for k in _TRANSIENT)
+
+
+def _with_backoff(fn, tries=3, base=1.0):
+    """إعادة محاولة بتأخير تصاعدي (1s, 2s) للأخطاء العابرة فقط."""
+    for i in range(tries):
+        try:
+            return fn()
+        except Busy:
+            raise
+        except Exception as e:
+            if i == tries - 1 or not _transient(e):
+                raise
+            log(f"transient error, retry {i + 1} in {base * 2 ** i:.0f}s: {str(e)[:100]}")
+            time.sleep(base * 2 ** i)
+
+
 def smart_extract(url):
     if is_youtube(url):
         return _extract_youtube(url)
     t = time.time()
-    info = extract_raw(url)
+    info = _with_backoff(lambda: extract_raw(url))
     log(f"{info.get('extractor')} extract={time.time() - t:.1f}s")
     return info

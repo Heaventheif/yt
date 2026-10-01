@@ -1,7 +1,18 @@
-"""دوال نقية على نتيجة الاستخراج (info): اختيار الصيغ وبناء الخيارات. لا شبكة ولا Flask هنا."""
+"""دوال نقية على نتيجة الاستخراج (info): اختيار الصيغ وبناء الخيارات. لا شبكة ولا Flask هنا.
+
+الخيارات:
+  - صيغة مباشرة فيها فيديو+صوت (muxed)            fid = معرّف الصيغة
+  - فيديو منفصل + أفضل صوت متوافق يُدمجان بـ ffmpeg   fid = "videoId+audioId"
+  - فيديو بلا صوت                                  fid = معرّف الصيغة
+  - صوت فقط (كل الأنواع والجودات)
+"""
+import merge
 
 DIRECT_PROTOCOLS = ("http", "https")
 DEFAULT_HEIGHT = 720
+_CODEC_NAMES = (("avc1", "H.264"), ("h264", "H.264"), ("vp09", "VP9"), ("vp9", "VP9"), ("av01", "AV1"),
+                ("hev1", "H.265"), ("hvc1", "H.265"), ("vp8", "VP8"))
+_CODEC_RANK = {"H.264": 3, "VP9": 2, "AV1": 1}   # أفضلية التوافق داخل نفس الحاوية
 
 
 def _is_direct(f):
@@ -12,14 +23,50 @@ def _size(f):
     return f.get("filesize") or f.get("filesize_approx")
 
 
-def _add_video(videos, f):
-    """يحتفظ بأفضل صيغة (mp4 ثم الأعلى bitrate) لكل ارتفاع"""
+def _has_video(f):
+    return f.get("vcodec") != "none"   # None (مجهول) يُعدّ فيديو، كالسلوك الأصلي
+
+
+def _has_audio(f):
+    return f.get("acodec") != "none"
+
+
+def _codec(f):
+    c = (f.get("vcodec") or "").lower()
+    for key, name in _CODEC_NAMES:
+        if c.startswith(key):
+            return name
+    return ""
+
+
+def _family(f):
+    """حاوية الإخراج المتوقعة: mp4 أو webm (وإلا ext كما هو)"""
+    ext = f.get("ext") or ""
+    return "mp4" if ext in ("mp4", "m4a", "m4v", "mov") else ext
+
+
+def _score(f):
+    return (_CODEC_RANK.get(_codec(f), 0), f.get("tbr") or 0)
+
+
+def _label(f, merged=False, silent=False):
     h = f.get("height") or 0
-    score = (f.get("ext") == "mp4", f.get("tbr") or 0)
-    if h in videos and score <= videos[h][0]:
-        return
-    label = (f"{h}p" if h else "جودة قياسية") + f" • {(f.get('ext') or '').upper()}"
-    videos[h] = (score, {"fid": f["format_id"], "label": label, "size": _size(f), "height": h})
+    fps = int(f.get("fps") or 0)
+    parts = [(f"{h}p" + (str(fps) if fps > 30 else "")) if h else "جودة قياسية", (f.get("ext") or "").upper()]
+    if _codec(f):
+        parts.append(_codec(f))
+    if merged:
+        parts.append("دمج")
+    if silent:
+        parts.append("بدون صوت")
+    return " • ".join(parts)
+
+
+def _best_audio(formats, family):
+    """أفضل صوت مباشر متوافق مع الحاوية: m4a للـ mp4، webm/opus للـ webm"""
+    want = "m4a" if family == "mp4" else "webm"
+    cands = [f for f in formats if _is_direct(f) and _has_audio(f) and not _has_video(f) and f.get("ext") == want]
+    return max(cands, key=lambda f: f.get("abr") or f.get("tbr") or 0, default=None)
 
 
 def _add_audio(audios, f):
@@ -32,28 +79,79 @@ def _add_audio(audios, f):
     audios[key] = (abr, {"fid": f["format_id"], "label": label, "size": _size(f), "height": 0})
 
 
-def collect_options(info):
-    """يرجع (قائمة الفيديو، قائمة الصوت) مرتبة من الأفضل"""
-    videos, audios = {}, {}
-    for f in info.get("formats", []):
+def collect_options(info, allow_merge=True):
+    """يرجع (قائمة الفيديو، قائمة الصوت) مرتبة من الأفضل.
+    allow_merge=False يستبعد خيارات الدمج (مثلا عند طلب رابط مباشر واحد)."""
+    formats = info.get("formats", [])
+    can_merge = allow_merge and merge.available()
+    best = {}      # (height, family) -> (score, option, has_audio)
+    silent = {}    # (height, family) -> (score, option)
+
+    def put(table, key, score, opt, prefer_new):
+        old = table.get(key)
+        if old is None or prefer_new(score, old[0]):
+            table[key] = (score, opt)
+
+    audios = {}
+    for f in formats:
         if not _is_direct(f):
             continue
-        has_video = f.get("vcodec") != "none"
-        has_audio = f.get("acodec") != "none"
-        if has_video and has_audio:
-            _add_video(videos, f)
-        elif has_audio:
+        v, a = _has_video(f), _has_audio(f)
+        if a and not v:
             _add_audio(audios, f)
-    video = [v[1] for _, v in sorted(videos.items(), key=lambda x: -x[0])]
+            continue
+        if not v:
+            continue
+        h, fam = f.get("height") or 0, _family(f)
+        if a:   # صيغة جاهزة بصوت: الأفضلية لها على الدمج (أخف وتدعم الاستئناف)
+            opt = {"fid": f["format_id"], "label": _label(f), "size": _size(f), "height": h, "sound": True}
+            put(best, (h, fam), (1,) + _score(f), opt, lambda n, o: n > o)
+            continue
+        # فيديو بلا صوت
+        opt = {"fid": f["format_id"], "label": _label(f, silent=True), "size": _size(f), "height": h, "sound": False}
+        put(silent, (h, fam), _score(f), opt, lambda n, o: n > o)
+        if can_merge and fam in ("mp4", "webm"):
+            au = _best_audio(formats, fam)
+            if au:
+                size = (_size(f) + _size(au)) if _size(f) and _size(au) else None
+                mopt = {"fid": f"{f['format_id']}+{au['format_id']}", "label": _label(f, merged=True),
+                        "size": size, "height": h, "sound": True}
+                put(best, (h, fam), (0,) + _score(f), mopt, lambda n, o: n > o)
+
+    rows = [(h, fam, 0, opt) for (h, fam), (_, opt) in best.items()]
+    rows += [(h, fam, 1, opt) for (h, fam), (_, opt) in silent.items()]
+    rows.sort(key=lambda r: (-r[0], r[2], 0 if r[1] == "mp4" else 1))
+    video = [dict(r[3]) for r in rows]
     audio = [v[1] for v in sorted(audios.values(), key=lambda x: -x[0])]
     return video, audio
 
 
-def get_fmt(info, fid):
+def _find(info, fid):
     for f in info.get("formats", []):
         if f.get("format_id") == fid and f.get("url"):
             return f
     return None
+
+
+def split_fid(fid):
+    """'137+140' -> ('137', '140') ؛ صيغة عادية -> (fid, None)"""
+    if "+" in fid:
+        v, a = fid.split("+", 1)
+        return v, a
+    return fid, None
+
+
+def get_fmt(info, fid):
+    return _find(info, split_fid(fid)[0])
+
+
+def get_merge_pair(info, fid):
+    """(video_fmt, audio_fmt) إن كان fid خيار دمج، وإلا None"""
+    v, a = split_fid(fid)
+    if not a:
+        return None
+    vf, af = _find(info, v), _find(info, a)
+    return (vf, af) if vf and af else None
 
 
 def match_fmt(info, old):
@@ -70,11 +168,12 @@ def match_fmt(info, old):
     return None
 
 
-def pick_fid(info, kind, quality):
-    """يختار معرّف الصيغة: أفضل صوت، أو أعلى فيديو لا يتجاوز الجودة المطلوبة"""
-    video, audio = collect_options(info)
+def pick_fid(info, kind, quality, allow_merge=True):
+    """يختار معرّف الصيغة: أفضل صوت، أو أعلى فيديو (بصوت) لا يتجاوز الجودة المطلوبة"""
+    video, audio = collect_options(info, allow_merge)
     if kind == "audio":
         return audio[0]["fid"] if audio else None
+    video = [o for o in video if o.get("sound")]
     if not video:
         return None
     limit = int(quality) if str(quality).isdigit() else DEFAULT_HEIGHT
@@ -84,8 +183,8 @@ def pick_fid(info, kind, quality):
     return video[-1]["fid"]
 
 
-def info_payload(info):
-    video, audio = collect_options(info)
+def info_payload(info, allow_merge=True):
+    video, audio = collect_options(info, allow_merge)
     return {"ok": True, "title": info["title"], "uploader": info["uploader"],
             "duration": info["duration"], "thumbnail": info["thumbnail"],
             "video": video, "audio": audio}

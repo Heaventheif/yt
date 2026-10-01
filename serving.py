@@ -4,11 +4,13 @@ import re
 from flask import Response, jsonify, request
 from requests.utils import quote
 
-from config import REFRESH_CODES
+from config import MAX_FILE_MB, REFRESH_CODES
 from errors import HttpFailure, UpstreamError
-from formats import get_fmt, match_fmt
+from formats import get_fmt, get_merge_pair, match_fmt
+import merge
 from info_cache import get_info
 from responses import jerr, err
+from security import client_ip
 from streaming import acquire_slot, open_upstream, stream_gen
 
 CONTENT_TYPES = {"mp4": "video/mp4", "webm": "video/webm", "m4a": "audio/mp4", "mp3": "audio/mpeg",
@@ -56,7 +58,7 @@ def _content_type(fmt):
 
 
 def _file_title(info, fmt):
-    title = re.sub(r'[\\/:*?"<>|\r\n]+', "_", info.get("title") or "file")[:80]
+    title = re.sub(r'[\\/:*?"<>|\x00-\x1f\x7f]+', "_", info.get("title") or "file")[:80].strip(" .") or "file"
     if fmt.get("height") and fmt.get("vcodec") != "none":
         title += f" [{fmt['height']}p]"
     return title
@@ -78,20 +80,75 @@ def _response_headers(info, fmt, up, cstart, cend):
     return headers, status
 
 
-def serve(url, fid, check=False):
+def _serve_merged(url, info, pair, slot, check):
+    """فيديو منفصل + صوت منفصل → ffmpeg → العميل. يرجع (response, handed_off)"""
+    if not merge.MUX_SLOTS.acquire(blocking=False):
+        return jerr("عمليات الدمج مشغولة، حاول بعد قليل", 429), False
+    mux_held = True
+    try:
+        vfmt, afmt = pair
+        vup, info, vfmt = _open_with_refresh(url, info, vfmt, 0, None)
+        try:
+            aup, info, afmt = _open_with_refresh(url, info, afmt, 0, None)
+        except BaseException:
+            vup.resp.close()
+            raise
+        total = (vup.total + aup.total) if vup.total and aup.total else None
+        if MAX_FILE_MB and total and total > MAX_FILE_MB * 1048576:
+            vup.resp.close(); aup.resp.close()
+            return jerr(f"حجم الملف يتجاوز الحد المسموح ({MAX_FILE_MB}MB)", 413), False
+        if check:
+            vup.resp.close(); aup.resp.close()
+            return jsonify(ok=True, size=total, merged=True), False
+        proc, stop, threads, errbuf = merge.start_merge(vfmt, vup, afmt, aup)
+        first = b""
+        try:
+            first = proc.stdout.read1(262144)   # ننتظر أول بايتات ناتجة لنكشف فشل الدمج قبل إرسال الهيدرات
+        except Exception:
+            pass
+        if not first:
+            code = proc.poll()
+            msg = merge.error_text(errbuf)
+            merge.stop_merge(proc, stop, threads)
+            print(f"[FFMPEG] failed code={code} {msg}", flush=True)
+            return jerr("تعذر دمج الصوت والفيديو لهذه الصيغة، جرّب صيغة أخرى", 502), False
+        cont = merge.container(vfmt)
+        headers = {"Content-Type": "video/webm" if cont == "webm" else "video/mp4",
+                   "Content-Disposition": disposition(_file_title(info, vfmt), cont),
+                   "Cache-Control": "no-store", "Accept-Ranges": "none", "X-Accel-Buffering": "no"}
+        job = merge.MergeJob(proc, stop, threads, slot)
+        resp = Response(merge.merged_chunks(job, first), status=200, headers=headers)
+        resp.call_on_close(job.release)   # يغطي حالة انقطاع العميل قبل بدء المولّد
+        mux_held = False   # صارت MergeJob مسؤولة عن تحرير MUX_SLOTS والخانة
+        return resp, True
+    finally:
+        if mux_held:
+            merge.MUX_SLOTS.release()
+
+
+def serve(url, fid, check=False, per_ip=False):
     """check=True: يتحقق فقط ويرجع الحجم دون تنزيل"""
     info = get_info(url)
     fmt = get_fmt(info, fid)
     if not fmt:
         return jerr("الصيغة غير موجودة، أعد البحث عن الرابط", 404)
-    cstart, cend = (0, None) if check else _requested_range()
+    pair = get_merge_pair(info, fid) if "+" in fid else None
+    if "+" in fid and (not pair or not merge.available()):
+        return jerr("الدمج غير متاح لهذه الصيغة، أعد البحث عن الرابط", 404)
+    cstart, cend = (0, None) if (check or pair) else _requested_range()
 
-    slot = acquire_slot()
+    slot = acquire_slot(client_ip() if per_ip else None)
     if slot is None:
         return jerr("الخادم مشغول بتنزيلات أخرى، حاول بعد قليل", 429)
     handed_off = False
     try:
+        if pair:
+            resp, handed_off = _serve_merged(url, info, pair, slot, check)
+            return resp
         up, info, fmt = _open_with_refresh(url, info, fmt, cstart, cend)
+        if MAX_FILE_MB and up.total and up.total > MAX_FILE_MB * 1048576:
+            up.resp.close()
+            return jerr(f"حجم الملف يتجاوز الحد المسموح ({MAX_FILE_MB}MB)", 413)
         if up.last < cstart:
             up.resp.close()
             return jerr("نطاق غير صالح", 416)

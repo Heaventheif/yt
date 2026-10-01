@@ -3,12 +3,14 @@ config · errors · net · formats · extractor · info_cache · streaming · se
 """
 import re
 import threading
+import time
 from functools import wraps
 
 import yt_dlp
 from flask import Flask, Response, jsonify, request
 
 import keepalive
+import observability
 from config import CORS_ORIGIN, WARMUP, WEB_PUBLIC
 from cookies_util import COOKIE_STATS
 from extractor import warmup
@@ -19,9 +21,13 @@ from responses import err, jerr
 from security import auth_ok, rate_ok
 from config import API_RATE_LIMIT
 from serving import serve
+from streaming import STATS
+from url_safety import is_public_url
 from url_utils import normalize_url
 
+observability.init()
 app = Flask(__name__)
+STARTED = time.time()
 
 PUBLIC_PATHS = ("/", "/health", "/docs", "/encode")
 FID_PATTERN = re.compile(r"^[\w.\-+]+$")
@@ -46,6 +52,8 @@ def with_url(missing_msg="url مطلوب"):
             url = valid_url()
             if not url:
                 return jerr(missing_msg, 400)
+            if not is_public_url(url):
+                return jerr("الرابط غير مسموح", 400)
             try:
                 return fn(url)
             except Exception as e:
@@ -54,10 +62,10 @@ def with_url(missing_msg="url مطلوب"):
     return decorator
 
 
-def _pick(url):
+def _pick(url, allow_merge=True):
     """(info, fid) حسب type و q في الطلب"""
     info = get_info(url)
-    return info, pick_fid(info, request.args.get("type", "video"), request.args.get("q"))
+    return info, pick_fid(info, request.args.get("type", "video"), request.args.get("q"), allow_merge)
 
 
 # ------------------------- الحماية -------------------------
@@ -106,9 +114,22 @@ def encode_page():
     return Response(ENCODE_HTML, mimetype="text/html")
 
 
+def _pot_up():
+    import os
+    import socket
+    if os.getenv("ENABLE_POT", "1") != "1":
+        return None
+    try:
+        socket.create_connection(("127.0.0.1", 4416), timeout=0.3).close()
+        return True
+    except OSError:
+        return False
+
+
 @app.get("/health")
 def health():
-    return jsonify(ok=True, yt_dlp=yt_dlp.version.__version__)
+    return jsonify(ok=True, pot_server=_pot_up(), yt_dlp=yt_dlp.version.__version__, uptime_s=int(time.time() - STARTED),
+                   active_downloads=STATS["active"], served_mb=STATS["bytes"] >> 20)
 
 
 @app.get("/cookies")
@@ -133,7 +154,7 @@ def web_dl(url):
     fid = request.args.get("fid", "")
     if not FID_PATTERN.match(fid):
         return jerr("طلب غير صحيح", 400)
-    return serve(url, fid, check=bool(request.args.get("check")))
+    return serve(url, fid, check=bool(request.args.get("check")), per_ip=True)
 
 
 # ------------------------- API بمفتاح (للبوت) -------------------------
@@ -146,7 +167,7 @@ def api_info(url):
 @app.get("/link")
 @with_url()
 def api_link(url):
-    info, fid = _pick(url)
+    info, fid = _pick(url, allow_merge=False)   # رابط واحد مباشر: بلا دمج
     fmt = get_fmt(info, fid) if fid else None
     if not fmt:
         return jerr("لا توجد صيغة مناسبة", 404)
