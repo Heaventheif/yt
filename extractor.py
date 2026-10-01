@@ -8,7 +8,7 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 import yt_dlp
 
 from config import (EXTRACT_QUEUE_MULTIPLIER, EXTRACT_WAIT_SEC, MAX_EXTRACT, PROBE_ENABLED, PROBE_TIMEOUT, PROXY,
-                    WARMUP_URL, YT_CLIENTS, YT_FALLBACKS)
+                    WARMUP_URL, YT_CLIENTS, YT_FALLBACKS, YT_NOAUTH_CLIENTS, YT_TRY_NO_COOKIES)
 from cookies_util import COOKIES_PATH
 from config import DISABLE_GENERIC
 from errors import Busy
@@ -49,7 +49,7 @@ def slim(d):
             "extractor": str(d.get("extractor_key") or ""), "formats": fmts}
 
 
-def ytdl_opts(clients=None):
+def ytdl_opts(clients=None, cookies=True):
     yt_args = {"skip": ["hls", "dash", "translated_subs"]}
     player_clients = YT_CLIENTS if clients is None else clients
     if player_clients:
@@ -60,7 +60,7 @@ def ytdl_opts(clients=None):
             "extractor_args": {"youtube": yt_args}}
     if DISABLE_GENERIC:
         opts["allowed_extractors"] = ["default", "-generic"]
-    if os.path.exists(COOKIES_PATH):
+    if cookies and os.path.exists(COOKIES_PATH):
         opts["cookiefile"] = COOKIES_PATH
     if PROXY:
         opts["proxy"] = PROXY
@@ -85,10 +85,10 @@ class _Collect:
     error = warning
 
 
-def _run_extract(url, clients=None):
+def _run_extract(url, clients=None, cookies=True):
     try:
         col = _Collect()
-        opts = ytdl_opts(clients)
+        opts = ytdl_opts(clients, cookies)
         opts["logger"] = col
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = slim(ydl.extract_info(url, download=False))
@@ -99,7 +99,7 @@ def _run_extract(url, clients=None):
         _EXTRACT_QUEUE.release()
 
 
-def extract_raw(url, clients=None):
+def extract_raw(url, clients=None, cookies=True):
     """يضع مهمة yt-dlp في طابور محدود وينتظر النتيجة بمهلة واضحة.
 
     إذا انتهت مهلة انتظار النتيجة، نحاول إلغاء المهمة إن لم تكن قد بدأت بعد.
@@ -110,7 +110,7 @@ def extract_raw(url, clients=None):
         raise Busy("الخادم مشغول بطلبات استخراج أخرى، حاول بعد قليل")
     future = None
     try:
-        future = _EXTRACT_EXECUTOR.submit(_run_extract, url, clients)
+        future = _EXTRACT_EXECUTOR.submit(_run_extract, url, clients, cookies)
         try:
             return future.result(timeout=max(30, EXTRACT_WAIT_SEC + 30))
         except FutureTimeout:
@@ -174,27 +174,31 @@ def _has_adaptive(info):
 
 
 def _client_order():
+    """قائمة محاولات (عملاء، هل نستخدم الكوكيز). الأولى بلا كوكيز لأنها وحدها تُبقي عملاء الصيغ المنفصلة."""
     now = time.time()
     recent = _last_good_client if _last_good_client is not None and now - _last_good_at < _CLIENT_TTL else None
+    base = ([(YT_NOAUTH_CLIENTS or None, False)] if YT_TRY_NO_COOKIES else []) + [(None, True)] + \
+           [(cl, True) for cl in YT_FALLBACKS]
     order = []
-    for cl in [recent, None] + YT_FALLBACKS:
-        if cl not in order:
-            order.append(cl)
+    for a in [recent] + base:
+        if a is not None and a not in order:
+            order.append(a)
     return order
 
 
 def _extract_youtube(url):
     global _last_good_client, _last_good_at
     first_err, first_code, weak = None, None, None
-    for cl in _client_order():
-        name = ",".join(cl) if cl else "default"
+    for attempt in _client_order():
+        cl, use_cookies = attempt
+        name = (",".join(cl) if cl else "default") + ("" if use_cookies else "+nocookies")
         t0 = time.time()
         try:
-            info = extract_raw(url, cl)
+            info = extract_raw(url, cl, use_cookies)
         except Busy:
             raise
         except Exception as e:
-            log(f"youtube client={name} FAILED after {time.time() - t0:.1f}s: {str(e)[:120]}")
+            log(f"youtube client={name} FAILED after {time.time() - t0:.1f}s: {str(e)[:220]}")
             first_err = first_err or e
             continue
         t1 = time.time()
@@ -210,7 +214,7 @@ def _extract_youtube(url):
         log(f"youtube client={name} extract={t1 - t0:.1f}s probe={time.time() - t1:.1f}s "
             f"formats={len(info.get('formats', []))} http={code}")
         if code in OK_CODES:
-            _last_good_client = cl
+            _last_good_client = attempt
             _last_good_at = time.time()
             return info
         if first_code is None:

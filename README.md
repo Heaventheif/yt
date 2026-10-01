@@ -105,6 +105,7 @@ python -m unittest discover -s tests -v
 - التحويل حقيقي (libmp3lame) وليس نسخاً: ≈0.7 ثانية CPU لكل دقيقة صوت. على 0.1 CPU يعني ≈8 أضعاف سرعة التشغيل، فأغنية 4 دقائق تقريباً نصف دقيقة.
 - متغيرات: `MP3_ENABLED` (1/0) و`MP3_BITRATES` (افتراضي `128,192`). تشارك `MAX_MERGES` مع الدمج.
 
-## عملاء يوتيوب
-- `YT_CLIENTS` الافتراضي `default,android_vr`: العميل default وحده يعيد غالباً صيغاً بلا روابط مباشرة (SABR) فلا يبقى سوى 360p، وandroid_vr يعيد الصيغ المنفصلة (حتى الجودات العالية) بروابط مباشرة. إن جاءت النتيجة بصيغة جاهزة فقط يجرّب الكود العملاء التالية (`YT_FALLBACK_CLIENTS`، افتراضي `tv;mweb`) ويظهر ذلك في السجل: `gave only muxed formats`.
-
+## عملاء يوتيوب (لماذا كانت تظهر 360p فقط)
+- yt-dlp يحذف تلقائياً العملاء التي لا تدعم الكوكيز (`visionos`, `android_vr`, `ios`, `android`) فور وجود كوكيز مسجَّلة، ويستخدم بدلها `web_embedded, tv_downgraded, web`. هذه الأخيرة تعيد الصيغ المنفصلة بلا روابط مباشرة (SABR)، فلا يبقى سوى 360p الجاهزة. بدون كوكيز يستخدم `visionos, web` فتظهر كل الجودات (وهذا ما يفعله yt.sh).
+- لذلك المحاولة الأولى الآن **بلا كوكيز** بعملاء `YT_NOAUTH_CLIENTS` (افتراضي `default,android_vr`). إن فشلت (مثل «Sign in to confirm you're not a bot») أو لم تعطِ صيغاً منفصلة، تأتي المحاولة بالكوكيز ثم `YT_FALLBACK_CLIENTS` (افتراضي `tv;mweb`).
+- `YT_TRY_NO_COOKIES=0` يعطّل المحاولة بلا كوكيز. السجل يوضح ما حدث: `client=default,android_vr+nocookies`، `gave only muxed formats`، `FAILED ...`.
