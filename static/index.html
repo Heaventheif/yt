@@ -3,8 +3,9 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="theme-color" content="#0e1a22">
-<title>محمّل الوسائط</title>
+<meta name="theme-color" content="#101827">
+<meta name="description" content="أداة بسيطة لجلب صيغ الوسائط من الروابط المدعومة.">
+<title>مِرسى — تحميل الوسائط</title>
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="/static/app.css">
@@ -12,30 +13,51 @@
 <body>
 <main class="wrap">
   <header class="top">
-    <h1>محمّل الوسائط</h1>
-    <p class="lead">الصق رابط الفيديو أو شاركه من أي تطبيق، واختر الصيغة التي تناسب جهازك.</p>
+    <a class="brand" href="/" aria-label="مِرسى، الصفحة الرئيسية">
+      <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+      <span><strong>مِرسى</strong><small>مسار واضح للوسائط</small></span>
+    </a>
+    <div class="top-actions">
+      <span class="availability"><i></i> جاهز للعبور</span>
+      <button id="theme" class="icon-button" type="button" aria-label="تبديل المظهر" title="تبديل المظهر">◐</button>
+    </div>
   </header>
 
-  <form id="bar" class="bar" autocomplete="off">
-    <label class="sr" for="url">رابط الفيديو</label>
-    <input id="url" type="text" inputmode="url" dir="ltr" placeholder="https://youtu.be/…" enterkeyhint="search">
-    <button id="go" type="submit" class="primary">جلب الصيغ</button>
-  </form>
+  <section class="hero" aria-labelledby="hero-title">
+    <div class="hero-copy">
+      <p class="eyebrow"><span>01</span> نقطة الانطلاق</p>
+      <h1 id="hero-title">رابط واحد.<br><em>مسارات كثيرة.</em></h1>
+      <p class="lead">ألصق رابط الفيديو أو شاركه من أي تطبيق. نقرأه، نرتّب صِيَغه، ثم نترك لك اختيار الطريق الأنسب.</p>
+    </div>
+    <div class="signal" aria-hidden="true">
+      <span class="signal-ring ring-one"></span><span class="signal-ring ring-two"></span>
+      <span class="signal-core">↘</span>
+      <span class="signal-label">أنت هنا</span>
+    </div>
+  </section>
+
+  <section class="dock" aria-label="إدخال رابط الوسائط">
+    <div class="dock-top"><span>أدخل المصدر</span><span class="dock-hint">يوتيوب · فيسبوك · تيك توك · وغيرها</span></div>
+    <form id="bar" class="bar" autocomplete="off">
+      <label class="sr" for="url">رابط الفيديو</label>
+      <input id="url" type="text" inputmode="url" dir="ltr" placeholder="https://…" enterkeyhint="search" spellcheck="false">
+      <button id="paste" type="button" class="paste">لصق</button>
+      <button id="go" type="submit" class="primary">اعثر على الصيغ <span aria-hidden="true">↙</span></button>
+    </form>
+    <p class="dock-note"><span aria-hidden="true">⌁</span> لا نحتفظ بالرابط بعد انتهاء الطلب.</p>
+  </section>
 
   <section id="res" aria-live="polite"></section>
   <section id="saved" class="saved" hidden>
-    <div class="saved-head">
-      <h2>المحفوظ على هذا الجهاز</h2>
-      <p id="meter-text" class="muted"></p>
-    </div>
+    <div class="saved-head"><div><p class="eyebrow"><span>03</span> أرشيفك المحلي</p><h2>المحفوظ على هذا الجهاز</h2></div><p id="meter-text" class="muted"></p></div>
     <div class="meter" role="progressbar" aria-label="المساحة المستخدمة" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><i id="meter"></i></div>
     <ul id="saved-list"></ul>
   </section>
   <section id="recents" class="recents" hidden>
-    <h2>آخر الروابط</h2>
+    <div class="section-head"><div><p class="eyebrow"><span>02</span> آثار قريبة</p><h2>آخر الروابط</h2></div><span class="section-mark" aria-hidden="true">⌁⌁⌁</span></div>
     <ul id="recent-list"></ul>
   </section>
-  <p class="foot">للاستخدام الشخصي فقط. تأكد من حقك في تنزيل المحتوى وحفظه.</p>
+  <footer class="foot"><span>مِرسى</span><span>للاستخدام الشخصي فقط. احفظ ما تملك حق حفظه.</span></footer>
 </main>
 <script src="/static/ledger.js"></script>
 <script src="/static/app.js"></script>

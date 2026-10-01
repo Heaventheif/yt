@@ -22,6 +22,16 @@
     return (h ? h + ':' + String(m).padStart(2, '0') : m) + ':' + String(x).padStart(2, '0');
   }
   function store(k, v) { try { if (v === undefined) return JSON.parse(localStorage.getItem(k) || 'null'); localStorage.setItem(k, JSON.stringify(v)); } catch (e) { return null; } }
+  function applyTheme(theme) {
+    if (theme) document.documentElement.setAttribute('data-theme', theme);
+    else document.documentElement.removeAttribute('data-theme');
+    store('theme', theme || 'system');
+  }
+  function toggleTheme() {
+    var now = document.documentElement.getAttribute('data-theme');
+    var systemLight = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches;
+    applyTheme((now || (systemLight ? 'light' : 'dark')) === 'light' ? 'dark' : 'light');
+  }
   function beacon(e, v) {
     try { navigator.sendBeacon('/web/telemetry', JSON.stringify([{ e: e, v: v == null ? 1 : v }])); } catch (x) { /* اختياري */ }
   }
@@ -293,6 +303,13 @@
 
   /* ---------- الإقلاع ---------- */
   $('bar').addEventListener('submit', function (e) { e.preventDefault(); search($('url').value); });
+  var savedTheme = store('theme');
+  if (savedTheme === 'light' || savedTheme === 'dark') applyTheme(savedTheme);
+  $('theme').addEventListener('click', toggleTheme);
+  $('paste').addEventListener('click', function () {
+    if (!navigator.clipboard || !navigator.clipboard.readText) { status('الصق الرابط في الحقل مباشرة.', 'err'); $('url').focus(); return; }
+    navigator.clipboard.readText().then(function (text) { $('url').value = text; $('url').focus(); }).catch(function () { status('لم يُسمح بالوصول إلى الحافظة. الصق الرابط يدويا.', 'err'); $('url').focus(); });
+  });
   if (IS_TV) spatialNav();
   renderRecent();
   var u = new URLSearchParams(location.search).get('u');

@@ -1,13 +1,13 @@
 {
-  "name": "محمّل الوسائط",
-  "short_name": "محمّل",
+  "name": "مِرسى — تحميل الوسائط",
+  "short_name": "مِرسى",
   "start_url": "/?src=pwa",
   "scope": "/",
   "display": "standalone",
   "dir": "auto",
   "lang": "ar",
-  "background_color": "#0e1a22",
-  "theme_color": "#0e1a22",
+  "background_color": "#101827",
+  "theme_color": "#101827",
   "icons": [{ "src": "/static/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }],
   "share_target": { "action": "/share", "method": "GET", "params": { "url": "u", "text": "t" } }
 }
