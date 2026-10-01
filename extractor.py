@@ -4,6 +4,7 @@ import re
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
+from urllib.parse import urljoin, urlsplit
 
 import yt_dlp
 
@@ -14,6 +15,7 @@ from config import DISABLE_GENERIC
 from errors import Busy
 from formats import collect_options, get_fmt
 from net import POOL, sess
+from url_safety import is_public_url
 
 
 # لا ننشئ yt-dlp بلا حدود عند الضغط. عدد مهام الاستخراج الفعلية يبقى محدوداً.
@@ -255,7 +257,51 @@ def _with_backoff(fn, tries=3, base=1.0):
             time.sleep(base * 2 ** i)
 
 
+_REDIRECT_HOSTS = {"bit.ly", "buff.ly", "fb.me", "fb.watch", "goo.gl", "is.gd", "ow.ly", "pin.it",
+                   "t.co", "tinyurl.com", "vm.tiktok.com"}
+
+
+def _needs_redirect_resolution(url):
+    """روابط المشاركة/الاختصار غالبا لا يطابقها yt-dlp قبل فك 301/302."""
+    try:
+        parts = urlsplit(url)
+        host = (parts.hostname or "").lower().rstrip(".")
+        path = parts.path.rstrip("/")
+    except ValueError:
+        return False
+    return host in _REDIRECT_HOSTS or (host.endswith("facebook.com") and path.startswith("/share"))
+
+
+def _resolve_redirects(url, max_hops=5):
+    """يفك التحويلات HTTP مع منع التحويل إلى مضيف داخلي أو بروتوكول غير HTTP."""
+    if not _needs_redirect_resolution(url):
+        return url
+    current = url
+    headers = {"User-Agent": "Mozilla/5.0 (compatible; yt-dlp service)"}
+    for _ in range(max_hops):
+        try:
+            with sess.get(current, allow_redirects=False, stream=True, timeout=(5, 10), headers=headers) as response:
+                if response.status_code not in (301, 302, 303, 307, 308):
+                    return current
+                location = response.headers.get("Location")
+        except Exception as exc:
+            log(f"redirect resolution skipped: {str(exc)[:160]}")
+            return url
+        if not location:
+            return current
+        target = urljoin(current, location)
+        if not is_public_url(target):
+            log("redirect resolution blocked a non-public target")
+            return url
+        current = target
+    return current
+
+
 def smart_extract(url):
+    resolved = _resolve_redirects(url)
+    if resolved != url:
+        log(f"resolved redirect: {url} -> {resolved}")
+        url = resolved
     if is_youtube(url):
         return _extract_youtube(url)
     t = time.time()

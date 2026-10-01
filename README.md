@@ -58,6 +58,7 @@ const buf = Buffer.from(await res.arrayBuffer());
 
 ## تسريع الجلب (fetch)
 - `url_utils.py`: يحوّل أي رابط (m.site.com، youtu.be، shorts، music...) إلى الصيغة القياسية ويحذف باراميترات التتبع، فيصبح لنفس الفيديو مفتاح كاش واحد. يعمل أيضا كسكريبت: `python url_utils.py "رابط"`.
+- روابط المشاركة والاختصار (مثل `facebook.com/share/v/...` و`fb.watch` و`vm.tiktok.com` و`bit.ly`) تُفك تحويلاتها تلقائيا قبل تمريرها إلى `yt-dlp`، مع التحقق من أن كل وجهة عامة لمنع SSRF. هذا يسمح لمستخرج المنصة الأصلي بالتعرف على الوجهة النهائية بدل ظهور `No suitable extractor found`.
 - استخراج يوتيوب يبدأ بآخر عميل نجح (GOOD_CLIENT) بدل تجربة الافتراضي الفاشل أولا.
 - فحص الروابط (probe) يتم بالتوازي، وتخطي HLS/DASH أثناء الاستخراج.
 - التنزيل يفتح اتصال الجزء التالي مسبقا (بدون توقف بين الأجزاء).
@@ -148,7 +149,7 @@ python -m unittest discover -s tests -v
 
 ### الاختبارات
 ```
-python -m unittest discover -s tests -v          # 56 اختبارا
+python -m unittest discover -s tests -v          # 59 اختبارا
 cd tests/js && npm i fake-indexeddb && node ledger.test.mjs   # ثوابت سقف 500MB
 ```
 

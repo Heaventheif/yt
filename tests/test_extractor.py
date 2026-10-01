@@ -68,5 +68,32 @@ class YoutubeAttempts(unittest.TestCase):
         self.assertIs(self._run([WEAK, RICH]), RICH)
 
 
+class RedirectResolution(unittest.TestCase):
+    def test_facebook_share_is_resolved_before_extraction(self):
+        share = "https://www.facebook.com/share/v/19Kaih4jUf/"
+        reel = "https://www.facebook.com/reel/4527590257510541/"
+        response = mock.MagicMock(status_code=302, headers={"Location": reel})
+        response.__enter__.return_value = response
+        response.__exit__.return_value = None
+        with mock.patch.object(extractor.sess, "get", return_value=response), \
+                mock.patch.object(extractor, "is_public_url", return_value=True):
+            self.assertEqual(extractor._resolve_redirects(share), reel)
+
+    def test_non_share_urls_are_not_requested(self):
+        with mock.patch.object(extractor.sess, "get") as get:
+            url = "https://www.facebook.com/reel/123/"
+            self.assertEqual(extractor._resolve_redirects(url), url)
+            get.assert_not_called()
+
+    def test_private_redirect_falls_back_to_original(self):
+        share = "https://www.facebook.com/share/v/abc/"
+        response = mock.MagicMock(status_code=302, headers={"Location": "http://127.0.0.1/"})
+        response.__enter__.return_value = response
+        response.__exit__.return_value = None
+        with mock.patch.object(extractor.sess, "get", return_value=response), \
+                mock.patch.object(extractor, "is_public_url", return_value=False):
+            self.assertEqual(extractor._resolve_redirects(share), share)
+
+
 if __name__ == "__main__":
     unittest.main()
