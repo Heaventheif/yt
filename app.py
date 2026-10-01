@@ -3,6 +3,7 @@ config · errors · net · formats · extractor · info_cache · streaming · se
 """
 import hashlib
 import json
+import math
 import re
 import threading
 import time
@@ -312,7 +313,12 @@ def web_telemetry():
     for ev in (items if isinstance(items, list) else [items])[:20]:
         if isinstance(ev, dict) and set(ev) <= _TELE_FIELDS and isinstance(ev.get("e"), str):
             v = ev.get("v", 1)
-            observability.count(ev["e"], float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else 1.0)
+            if isinstance(v, (int, float)) and not isinstance(v, bool):
+                v = float(v)
+                v = min(1000.0, max(-1000.0, v)) if math.isfinite(v) else 1.0
+            else:
+                v = 1.0
+            observability.count(ev["e"], v)
     return Response(status=204)
 
 

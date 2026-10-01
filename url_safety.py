@@ -26,7 +26,10 @@ def is_public_url(url):
         host = (parts.hostname or "").lower()
     except ValueError:
         return False
-    if parts.scheme not in ("http", "https") or not host or not _host_allowed(host):
+    # يمنع تسريب بيانات اعتماد أو تمريرها إلى طلبات HTTP، بما فيها روابط التحويل.
+    if parts.scheme not in ("http", "https") or parts.username is not None or parts.password is not None:
+        return False
+    if not host or not _host_allowed(host):
         return False
     if config.ALLOW_PRIVATE_URLS:
         return True
