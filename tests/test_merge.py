@@ -15,6 +15,7 @@ for k, v in dict(ALLOW_PRIVATE_URLS="1", WARMUP="0", WEB_PUBLIC="1", CHUNK_MB="0
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import info_cache  # noqa: E402
+import security  # noqa: E402
 import merge  # noqa: E402
 import streaming  # noqa: E402
 from app import app  # noqa: E402
@@ -90,6 +91,9 @@ class MergeTest(unittest.TestCase):
         cls.srv.shutdown()
         cls.tmp.cleanup()
 
+    def setUp(self):
+        security._hits.clear()   # test_api يضبط حد معدل صغيرا؛ نصفّره لتبقى الاختبارات مستقلة
+
     def _probe(self, data, suffix):
         p = os.path.join(self.tmp.name, "out" + suffix)
         with open(p, "wb") as fh:
@@ -107,7 +111,12 @@ class MergeTest(unittest.TestCase):
         self.assertTrue(any("دمج" in l for l in labels))
         self.assertTrue(any("بدون صوت" in l for l in labels))
         self.assertEqual(video[-1]["fid"], "18")   # 360p الجاهزة تبقى مباشرة بلا دمج
-        self.assertEqual({o["label"] for o in audio}, {"M4A • 128kbps", "WEBM • 96kbps"})
+        self.assertEqual({o["label"] for o in audio if not o.get("convert")}, {"M4A • 128kbps", "WEBM • 96kbps"})
+        self.assertEqual([o["fid"] for o in audio if o.get("convert")], ["140+mp3_192", "140+mp3_128"])
+        self.assertTrue(audio[0].get("convert"))   # MP3 أولا في تبويب الصوت
+        self.assertEqual(pick_fid(self.info, "audio", None), "140")   # type=audio يبقى الصوت الأصلي بلا تحويل
+        self.assertEqual(pick_fid(self.info, "mp3", "192"), "140+mp3_192")
+        self.assertEqual(pick_fid(self.info, "mp3", None), "140+mp3_128")
         self.assertEqual(pick_fid(self.info, "video", "720"), "136+140")
         self.assertEqual(pick_fid(self.info, "video", "480"), "18")
         self.assertEqual(pick_fid(self.info, "video", "720", allow_merge=False), "18")
@@ -139,22 +148,49 @@ class MergeTest(unittest.TestCase):
         j = self.c.get(f"/link?{self.q}&q=720", headers={"X-API-Key": "k"}).get_json()
         self.assertTrue(j["url"].endswith("/v.mp4") and "136" not in j["url"])
 
+    def test_mp3_conversion(self):
+        r = self.c.get(f"/web/dl?{self.q}&fid=140%2Bmp3_128")
+        self.assertEqual(r.status_code, 200, r.data[:200])
+        self.assertEqual(r.headers["Content-Type"], "audio/mpeg")
+        self.assertIn(".mp3", r.headers["Content-Disposition"])
+        p = os.path.join(self.tmp.name, "out.mp3")
+        with open(p, "wb") as fh:
+            fh.write(r.data)
+        meta = subprocess.run([FF, "-hide_banner", "-i", p], capture_output=True, text=True).stderr
+        self.assertIn("Audio: mp3", meta)
+        self.assertNotIn("Video:", meta)
+        self.assertRegex(meta, r"Duration: 00:00:0[78]")             # مدة الأصل ~8 ثوان
+        self.assertIn("title", meta)                                  # ID3 title
+        self.assertRegex(meta, r"128 kb/s")
+
+    def test_mp3_from_webm_opus_and_api_type_mp3(self):
+        r = self.c.get(f"/stream?{self.q}&type=mp3&q=192", headers={"X-API-Key": "k"})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.headers["Content-Type"], "audio/mpeg")
+        self.assertGreater(len(r.data), 100_000)   # 8s × 192kbps ≈ 190KB
+        self.assertEqual(self.c.get(f"/link?{self.q}&type=mp3", headers={"X-API-Key": "k"}).status_code, 404)
+
+    def test_mp3_rejects_unlisted_bitrate(self):
+        self.assertEqual(self.c.get(f"/web/dl?{self.q}&fid=140%2Bmp3_320").status_code, 404)
+        j = self.c.get(f"/web/dl?{self.q}&fid=140%2Bmp3_128&check=1").get_json()
+        self.assertTrue(j["ok"], j)
+
     def test_bad_pair_and_cleanup_on_disconnect(self):
         self.assertEqual(self.c.get(f"/web/dl?{self.q}&fid=136%2B999").status_code, 404)
         before_mux, before_dl = merge.MUX_SLOTS._value, streaming.DL_SLOTS._value
-        procs, orig = [], merge.start_merge
+        procs, orig = [], merge.start_job
 
         def spy(*a):
             res = orig(*a)
             procs.append(res[0])
             return res
-        merge.start_merge = spy
+        merge.start_job = spy
         try:
             r = self.c.get(f"/web/dl?{self.q}&fid=136%2B140", buffered=False)
             next(iter(r.response))   # بدأ التدفق
             r.close()                # العميل انقطع قبل الانتهاء
         finally:
-            merge.start_merge = orig
+            merge.start_job = orig
         for _ in range(50):
             if merge.MUX_SLOTS._value == before_mux and streaming.DL_SLOTS._value == before_dl:
                 break

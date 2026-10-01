@@ -6,7 +6,10 @@
   - فيديو بلا صوت                                  fid = معرّف الصيغة
   - صوت فقط (كل الأنواع والجودات)
 """
+import re
+
 import merge
+from config import MP3_BITRATES, MP3_ENABLED
 
 DIRECT_PROTOCOLS = ("http", "https")
 DEFAULT_HEIGHT = 720
@@ -69,6 +72,18 @@ def _best_audio(formats, family):
     return max(cands, key=lambda f: f.get("abr") or f.get("tbr") or 0, default=None)
 
 
+def _mp3_source(formats):
+    """مصدر التحويل: أفضل صوت منفصل (m4a أولا)، وإلا أخف صيغة جاهزة (يُهمل فيديوها بـ -vn)"""
+    audio_only = [f for f in formats if _is_direct(f) and _has_audio(f) and not _has_video(f)]
+    if audio_only:
+        return max(audio_only, key=lambda f: (f.get("ext") == "m4a", f.get("abr") or f.get("tbr") or 0))
+    muxed = [f for f in formats if _is_direct(f) and _has_audio(f) and _has_video(f)]
+    return min(muxed, key=lambda f: f.get("tbr") or 1 << 30, default=None)
+
+
+_MP3_FID = re.compile(r"^mp3_(\d{2,3})$")
+
+
 def _add_audio(audios, f):
     ext = (f.get("ext") or "").upper()
     abr = int(f.get("abr") or 0)
@@ -123,6 +138,12 @@ def collect_options(info, allow_merge=True):
     rows.sort(key=lambda r: (-r[0], r[2], 0 if r[1] == "mp4" else 1))
     video = [dict(r[3]) for r in rows]
     audio = [v[1] for v in sorted(audios.values(), key=lambda x: -x[0])]
+    if allow_merge and MP3_ENABLED and merge.available():
+        src = _mp3_source(formats)
+        if src:   # خيارات التحويل أولا في تبويب الصوت
+            mp3 = [{"fid": f"{src['format_id']}+mp3_{k}", "label": f"MP3 • {k}kbps • تحويل", "size": None,
+                    "height": 0, "convert": True} for k in MP3_BITRATES]
+            audio = mp3 + audio
     return video, audio
 
 
@@ -145,10 +166,20 @@ def get_fmt(info, fid):
     return _find(info, split_fid(fid)[0])
 
 
+def get_mp3_job(info, fid):
+    """(source_fmt, kbps) إن كان fid خيار تحويل MP3 (مثل 140+mp3_128) وإلا None"""
+    src, tag = split_fid(fid)
+    m = _MP3_FID.match(tag or "")
+    if not m or not MP3_ENABLED or int(m.group(1)) not in MP3_BITRATES:
+        return None
+    fmt = _find(info, src)
+    return (fmt, int(m.group(1))) if fmt else None
+
+
 def get_merge_pair(info, fid):
     """(video_fmt, audio_fmt) إن كان fid خيار دمج، وإلا None"""
     v, a = split_fid(fid)
-    if not a:
+    if not a or _MP3_FID.match(a):
         return None
     vf, af = _find(info, v), _find(info, a)
     return (vf, af) if vf and af else None
@@ -171,8 +202,14 @@ def match_fmt(info, old):
 def pick_fid(info, kind, quality, allow_merge=True):
     """يختار معرّف الصيغة: أفضل صوت، أو أعلى فيديو (بصوت) لا يتجاوز الجودة المطلوبة"""
     video, audio = collect_options(info, allow_merge)
+    if kind == "mp3":   # type=mp3&q=192 → أعلى معدل لا يتجاوز q (الافتراضي 128)
+        want = int(quality) if str(quality).isdigit() else 128
+        opts = [(int(o["fid"].rsplit("_", 1)[1]), o["fid"]) for o in audio if o.get("convert")]
+        ok = [o for o in opts if o[0] <= want] or opts[-1:]
+        return ok[0][1] if ok else None
     if kind == "audio":
-        return audio[0]["fid"] if audio else None
+        raw = [o for o in audio if not o.get("convert")]
+        return raw[0]["fid"] if raw else None
     video = [o for o in video if o.get("sound")]
     if not video:
         return None

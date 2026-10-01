@@ -23,8 +23,9 @@ CACHE_TTL = int(os.getenv("CACHE_TTL_SEC", "1200"))
 CACHE_MAX = int(os.getenv("CACHE_MAX", "80"))
 CHUNK = int(float(os.getenv("CHUNK_MB", "8")) * 1048576)  # حجم الجزء (Range)
 
-YT_CLIENTS = _clients(os.getenv("YT_CLIENTS", ""))
-YT_FALLBACKS = [_clients(x) for x in os.getenv("YT_FALLBACK_CLIENTS", "android_vr;tv;mweb").split(";") if x.strip()]
+# default وحده يعيد على يوتيوب غالبا صيغ SABR بلا روابط (فلا يبقى إلا 360p)؛ android_vr يعيد صيغا منفصلة بروابط مباشرة
+YT_CLIENTS = _clients(os.getenv("YT_CLIENTS", "default,android_vr"))
+YT_FALLBACKS = [_clients(x) for x in os.getenv("YT_FALLBACK_CLIENTS", "tv;mweb").split(";") if x.strip()]
 
 KEEP_ALIVE_MIN = int(os.getenv("KEEP_ALIVE_MINUTES", "10"))
 SELF_URL = os.getenv("SELF_URL") or os.getenv("RENDER_EXTERNAL_URL", "")
@@ -58,3 +59,7 @@ SENTRY_DSN = os.getenv("SENTRY_DSN", "")
 # ---- دمج ffmpeg (فيديو منفصل + صوت منفصل) ----
 MUX_ENABLED = os.getenv("MUX_ENABLED", "1") == "1"     # 0 = عرض الصيغ المباشرة فقط
 MAX_MERGES = max(1, int(os.getenv("MAX_MERGES", "1")))  # عمليات ffmpeg متزامنة (ذاكرة 512MB)
+
+# ---- تحويل MP3 (ffmpeg libmp3lame) ----
+MP3_ENABLED = os.getenv("MP3_ENABLED", "1") == "1"
+MP3_BITRATES = sorted({int(x) for x in os.getenv("MP3_BITRATES", "128,192").split(",") if x.strip().isdigit()}, reverse=True)

@@ -164,6 +164,15 @@ def is_youtube(url):
     return host == "youtu.be" or host.endswith(("youtube.com", "youtube-nocookie.com"))
 
 
+def _has_adaptive(info):
+    """هل فيها مسار فيديو أو صوت منفصل بروابط مباشرة (أساس الجودات العالية والصوت)؟"""
+    for f in info.get("formats", []):
+        if f.get("protocol") in ("http", "https") and f.get("url") and f.get("ext") != "mhtml":
+            if f.get("vcodec") == "none" or f.get("acodec") == "none":
+                return True
+    return False
+
+
 def _client_order():
     now = time.time()
     recent = _last_good_client if _last_good_client is not None and now - _last_good_at < _CLIENT_TTL else None
@@ -176,7 +185,7 @@ def _client_order():
 
 def _extract_youtube(url):
     global _last_good_client, _last_good_at
-    first_err, first_code = None, None
+    first_err, first_code, weak = None, None, None
     for cl in _client_order():
         name = ",".join(cl) if cl else "default"
         t0 = time.time()
@@ -193,6 +202,10 @@ def _extract_youtube(url):
         if not (video or audio):   # نتيجة بلا صيغ مباشرة ليست نجاحاً: جرّب العميل التالي
             log(f"youtube client={name} returned no direct formats (total={len(info.get('formats', []))})")
             continue
+        if not _has_adaptive(info):   # 360p الجاهزة فقط: جرّب عملاء أخرى بحثا عن الصيغ المنفصلة، واحتفظ بهذه كاحتياط
+            log(f"youtube client={name} gave only muxed formats (total={len(info.get('formats', []))}); trying next")
+            weak = weak or info
+            continue
         code = probe(info) if PROBE_ENABLED else 200
         log(f"youtube client={name} extract={t1 - t0:.1f}s probe={time.time() - t1:.1f}s "
             f"formats={len(info.get('formats', []))} http={code}")
@@ -202,6 +215,8 @@ def _extract_youtube(url):
             return info
         if first_code is None:
             first_code = code
+    if weak:
+        return weak
     _raise_youtube_failure(first_code, first_err)
 
 

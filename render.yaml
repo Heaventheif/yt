@@ -37,3 +37,5 @@ services:
         value: "10"
       - key: MAX_MERGES          # عمليات دمج ffmpeg متزامنة (كل واحدة ≈ 50MB RAM)
         value: "1"
+      - key: MP3_BITRATES        # معدلات تحويل MP3 المعروضة
+        value: "128,192"

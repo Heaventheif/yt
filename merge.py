@@ -40,6 +40,28 @@ def container(vfmt):
     return "webm" if vfmt.get("ext") == "webm" else "mp4"
 
 
+class Plan:
+    """ما سيُشغَّل في ffmpeg: المدخلات (صيغ) + وسائط الإخراج + نوع المحتوى والامتداد"""
+
+    def __init__(self, inputs, args, content_type, ext):
+        self.inputs, self.args, self.content_type, self.ext = inputs, args, content_type, ext
+
+
+def plan_merge(vfmt, afmt):
+    cont = container(vfmt)
+    flags = ["-movflags", "+frag_keyframe+empty_moov+default_base_moof"] if cont == "mp4" else []
+    return Plan([vfmt, afmt], ["-map", "0:v:0", "-map", "1:a:0", "-c", "copy", *flags, "-f", cont],
+                "video/webm" if cont == "webm" else "video/mp4", cont)
+
+
+def plan_mp3(afmt, kbps, title=""):
+    args = ["-vn", "-map", "0:a:0", "-c:a", "libmp3lame", "-b:a", f"{int(kbps)}k", "-write_xing", "0",
+            "-id3v2_version", "3"]
+    if title:
+        args += ["-metadata", "title=" + title.replace("\n", " ")[:120]]
+    return Plan([afmt], args + ["-f", "mp3"], "audio/mpeg", "mp3")
+
+
 class _NoSlot:
     """stream_gen يستدعي slot.release()؛ هنا الخانة الحقيقية يملكها مولّد الدمج"""
 
@@ -71,30 +93,30 @@ def _drain(stream, sink):
         pass
 
 
-def start_merge(vfmt, vup, afmt, aup):
-    """يشغّل ffmpeg ويرجع (proc, stop, threads, stderr_chunks)"""
+def start_job(plan, ups):
+    """يشغّل ffmpeg: كل مدخل يصله عبر pipe خاص من مصدره (ups بنفس ترتيب plan.inputs).
+    يرجع (proc, stop, threads, stderr_chunks)"""
     ff = ffmpeg_path()
-    vr, vw = os.pipe()
-    ar, aw = os.pipe()
-    cont = container(vfmt)
-    flags = ["-movflags", "+frag_keyframe+empty_moov+default_base_moof"] if cont == "mp4" else []
-    cmd = [ff, "-hide_banner", "-loglevel", "error", "-nostdin", "-threads", "1",
-           "-i", f"pipe:{vr}", "-i", f"pipe:{ar}", "-map", "0:v:0", "-map", "1:a:0",
-           "-c", "copy", *flags, "-f", cont, "pipe:1"]
+    pipes = [os.pipe() for _ in plan.inputs]          # [(read, write), ...]
+    cmd = [ff, "-hide_banner", "-loglevel", "error", "-nostdin", "-threads", "1"]
+    for r, _ in pipes:
+        cmd += ["-i", f"pipe:{r}"]
+    cmd += [*plan.args, "pipe:1"]
     try:
         proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                pass_fds=(vr, ar), preexec_fn=lambda: os.nice(5))
+                                pass_fds=tuple(r for r, _ in pipes), preexec_fn=lambda: os.nice(5))
     except Exception:
-        for fd in (vr, vw, ar, aw):
-            os.close(fd)
+        for r, w in pipes:
+            os.close(r)
+            os.close(w)
         raise
-    os.close(vr)
-    os.close(ar)
+    for r, _ in pipes:
+        os.close(r)
     stop = threading.Event()
     err = []
-    threads = [threading.Thread(target=_feed, args=(vfmt, vup, vw, stop), daemon=True),
-               threading.Thread(target=_feed, args=(afmt, aup, aw, stop), daemon=True),
-               threading.Thread(target=_drain, args=(proc.stderr, err), daemon=True)]
+    threads = [threading.Thread(target=_feed, args=(fmt, up, w, stop), daemon=True)
+               for fmt, up, (_, w) in zip(plan.inputs, ups, pipes)]
+    threads.append(threading.Thread(target=_drain, args=(proc.stderr, err), daemon=True))
     for t in threads:
         t.start()
     return proc, stop, threads, err

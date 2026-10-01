@@ -114,7 +114,7 @@ class ApiTest(unittest.TestCase):
         j = r.json
         self.assertTrue(j["ok"])
         self.assertEqual(len(j["video"]), 1)
-        self.assertEqual(j["audio"], [])
+        self.assertTrue(all(o.get("convert") for o in j["audio"]))   # لا صوت منفصل؛ فقط خيارات تحويل MP3 من الصيغة الجاهزة
         self.assertEqual(j["video"][0]["fid"], self.fid())
         before = FileServer.hits
         self.assertEqual(self.get(f"/info?url={self.src}").status_code, 200)
