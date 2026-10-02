@@ -250,8 +250,9 @@ def _client_order():
     base = ([(YT_NOAUTH_CLIENTS or None, False)] if YT_TRY_NO_COOKIES else []) + [(None, True)] + \
            [(cl, True) for cl in YT_FALLBACKS]
     order = []
-    # لا نقدّم محاولة قديمة بالكوكيز على التجربة السريعة بلا كوكيز.
-    candidates = ([recent] if recent is not None and (YT_ALLOW_COOKIES or not recent[1]) else []) + base
+    # لا نقدّم محاولة قديمة بالكوكيز على التجربة السريعة بلا كوكيز؛
+    # المحاولة الناجحة المحفوظة تضاف في النهاية فقط كتحسين لاحق.
+    candidates = base + ([recent] if recent is not None else [])
     if not YT_ALLOW_COOKIES:
         candidates = [a for a in candidates if not a[1]]
     for a in candidates:
