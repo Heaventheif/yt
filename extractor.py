@@ -9,7 +9,7 @@ from urllib.parse import urljoin, urlsplit
 import yt_dlp
 
 from config import (EXTRACT_QUEUE_MULTIPLIER, EXTRACT_WAIT_SEC, MAX_EXTRACT, PROBE_ENABLED, PROBE_TIMEOUT, PROXY,
-                    WARMUP_URL, YT_CLIENTS, YT_FALLBACKS, YT_NOAUTH_CLIENTS, YT_TRY_NO_COOKIES)
+                    WARMUP_URL, YT_ALLOW_COOKIES, YT_CLIENTS, YT_FALLBACKS, YT_NOAUTH_CLIENTS, YT_TRY_NO_COOKIES)
 from cookies_util import COOKIES_PATH
 from config import DISABLE_GENERIC
 from errors import Busy
@@ -250,7 +250,11 @@ def _client_order():
     base = ([(YT_NOAUTH_CLIENTS or None, False)] if YT_TRY_NO_COOKIES else []) + [(None, True)] + \
            [(cl, True) for cl in YT_FALLBACKS]
     order = []
-    for a in [recent] + base:
+    # لا نقدّم محاولة قديمة بالكوكيز على التجربة السريعة بلا كوكيز.
+    candidates = ([recent] if recent is not None and (YT_ALLOW_COOKIES or not recent[1]) else []) + base
+    if not YT_ALLOW_COOKIES:
+        candidates = [a for a in candidates if not a[1]]
+    for a in candidates:
         if a is not None and a not in order:
             order.append(a)
     return order
