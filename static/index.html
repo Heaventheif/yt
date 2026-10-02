@@ -46,6 +46,17 @@
     </form>
     <p class="dock-note"><span aria-hidden="true">⌁</span> لا نحتفظ بالرابط بعد انتهاء الطلب.</p>
   </section>
+  <button id="title-search-toggle" class="search-toggle" type="button"><span>⌕</span> ابحث باسم الأغنية أو الفيديو</button>
+
+  <div id="search-backdrop" class="search-backdrop" hidden></div>
+  <aside id="search-panel" class="search-panel" aria-labelledby="search-panel-title" hidden>
+    <div class="panel-head"><div><p class="eyebrow"><span>بحث</span> اختيار المسار</p><h2 id="search-panel-title">ما الذي تريد سماعه؟</h2></div><button id="search-close" class="icon-button" type="button" aria-label="إغلاق البحث">×</button></div>
+    <p class="panel-lead">اكتب الاسم، ثم اختر النتيجة الصحيحة قبل بدء التحليل.</p>
+    <div class="search-tabs" role="tablist"><button type="button" class="search-tab active" data-source="soundcloud" role="tab" aria-selected="true">SoundCloud</button><button type="button" class="search-tab" data-source="youtube" role="tab" aria-selected="false">YouTube</button></div>
+    <form id="title-search" class="title-search"><label class="sr" for="search-q">اسم الأغنية أو الفيديو</label><input id="search-q" type="search" placeholder="مثال: Amr Diab Tamally Maak" autocomplete="off"><button id="search-run" class="primary" type="submit">ابحث</button></form>
+    <div id="search-state" class="panel-state" aria-live="polite"></div>
+    <ul id="search-results" class="search-results"></ul>
+  </aside>
 
   <section id="res" aria-live="polite"></section>
   <section id="saved" class="saved" hidden>

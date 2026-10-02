@@ -18,7 +18,7 @@ import observability
 from config import (CORS_ORIGINS, DL_RATE_LIMIT, INFO_MAX_AGE, MAX_FID_LEN, MAX_URL_LEN, PLAYLIST_MAX_LIMIT,
                     TELEMETRY_ENABLED, THUMB_MAX_BYTES, THUMB_RATE_LIMIT, WARMUP, WEB_PUBLIC)
 from cookies_util import COOKIE_STATS
-from extractor import search_soundcloud, warmup
+from extractor import search_media, search_soundcloud, warmup
 from formats import detail_options, get_fmt, info_payload, pick_fid
 from info_cache import _cache as INFO_CACHE, get_info, get_playlist, remember_original
 from pages import DOCS_HTML, ENCODE_HTML
@@ -252,11 +252,16 @@ def web_info(url):
 @app.get("/web/search")
 def web_search():
     query = re.sub(r"\s+", " ", request.args.get("q", "").strip())
+    source = request.args.get("source", "soundcloud").lower()
     if len(query) < 2 or len(query) > 200:
         return jerr("اكتب عنوان أغنية صالحا (من حرفين إلى 200 حرف)", 400)
+    if source not in ("soundcloud", "youtube"):
+        return jerr("مصدر البحث غير صالح", 400)
     try:
-        result = search_soundcloud(query)
-        return etag_json({"ok": True, **result}, 120)
+        results = search_media(query, source, 10)
+        if not results:
+            return jerr("لم أجد نتائج مطابقة", 404)
+        return etag_json({"ok": True, "source": source, "results": results, **results[0]}, 120)
     except Exception as e:
         return err(e)
 

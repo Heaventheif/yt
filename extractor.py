@@ -66,6 +66,53 @@ def search_soundcloud(query):
             "thumbnail": info.get("thumbnail"), "duration": info.get("duration")}
 
 
+def search_media(query, source="soundcloud", limit=10):
+    """يبحث عن عدة نتائج قابلة للاختيار في SoundCloud أو YouTube."""
+    query = re.sub(r"\s+", " ", (query or "").strip())
+    if len(query) < 2 or len(query) > 200:
+        raise ValueError("اكتب عنوانا أطول قليلا")
+    if source not in ("soundcloud", "youtube"):
+        raise ValueError("مصدر البحث غير صالح")
+    prefix = "scsearch" if source == "soundcloud" else "ytsearch"
+    limit = max(1, min(10, int(limit)))
+    if not _EXTRACT_QUEUE.acquire(timeout=EXTRACT_WAIT_SEC):
+        raise Busy("الخادم مشغول بطلبات بحث أخرى، حاول بعد قليل")
+    future = None
+    try:
+        future = _EXTRACT_EXECUTOR.submit(_run_search, prefix + str(limit) + ":" + query)
+        return future.result(timeout=max(30, EXTRACT_WAIT_SEC + 30))
+    except FutureTimeout:
+        if future and future.cancel():
+            _EXTRACT_QUEUE.release()
+        raise Busy("استغرق البحث وقتا أطول من المسموح، حاول مجددا")
+    except Exception:
+        if future is None:
+            _EXTRACT_QUEUE.release()
+        raise
+
+
+def _run_search(search_url):
+    try:
+        opts = ytdl_opts(cookies=False)
+        opts.update({"noplaylist": False, "extract_flat": "in_playlist", "playlistend": 10,
+                     "ignoreerrors": True})
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            data = ydl.extract_info(search_url, download=False)
+        results = []
+        for entry in (data.get("entries") or []):
+            if not entry:
+                continue
+            url = entry.get("webpage_url") or entry.get("original_url") or entry.get("url")
+            if not url or not url.startswith("https://"):
+                continue
+            results.append({"url": url, "title": entry.get("title") or url,
+                            "uploader": entry.get("uploader") or entry.get("channel"),
+                            "thumbnail": entry.get("thumbnail"), "duration": entry.get("duration")})
+        return results
+    finally:
+        _EXTRACT_QUEUE.release()
+
+
 def ytdl_opts(clients=None, cookies=True):
     yt_args = {"skip": ["hls", "dash", "translated_subs"]}
     player_clients = YT_CLIENTS if clients is None else clients

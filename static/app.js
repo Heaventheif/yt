@@ -68,6 +68,33 @@
   }
   function status(text, cls) { var b = $('res'); b.textContent = ''; b.appendChild(el('p', 'status ' + (cls || ''), text)); }
 
+  function showSearchPanel(open) {
+    var panel = $('search-panel'), shade = $('search-backdrop');
+    panel.hidden = !open; shade.hidden = !open;
+    if (open) { panel.classList.add('open'); $('search-q').focus(); }
+    else { panel.classList.remove('open'); }
+  }
+  function renderSearchResults(rows) {
+    var ul = $('search-results'); ul.textContent = '';
+    rows.forEach(function (row) {
+      var li = el('li', 'search-result'), meta = el('div', 'search-result-meta');
+      if (row.thumbnail) { var im = el('img'); im.src = row.thumbnail; im.alt = ''; im.loading = 'lazy'; meta.appendChild(im); }
+      var copy = el('div'); copy.appendChild(el('strong', null, row.title || 'بدون عنوان')); copy.appendChild(el('small', null, row.uploader || '')); meta.appendChild(copy);
+      var use = el('button', 'use-result', 'استخدم الرابط'); use.type = 'button'; use.onclick = function () { $('url').value = row.url; showSearchPanel(false); search(row.url); };
+      li.appendChild(meta); li.appendChild(use); ul.appendChild(li);
+    });
+  }
+  async function titleSearch(source) {
+    var q = $('search-q').value.trim(), stateBox = $('search-state');
+    if (q.length < 2) { stateBox.textContent = 'اكتب اسمًا أطول قليلا.'; return; }
+    $('search-run').disabled = true; stateBox.textContent = 'جارٍ البحث…'; $('search-results').textContent = '';
+    try { var data = await jget('/web/search?source=' + encodeURIComponent(source) + '&q=' + encodeURIComponent(q));
+      if (!data.ok) throw new Error(data.error || 'لم أجد نتائج');
+      renderSearchResults(data.results || [data]); stateBox.textContent = (data.results || []).length + ' نتائج — اختر واحدة.';
+    } catch (e) { stateBox.textContent = e.message; }
+    $('search-run').disabled = false;
+  }
+
   /* ---------- البحث والعرض ---------- */
   async function search(raw) {
     var url = extractUrl(raw);
@@ -309,6 +336,15 @@
 
   /* ---------- الإقلاع ---------- */
   $('bar').addEventListener('submit', function (e) { e.preventDefault(); search($('url').value); });
+  var searchSource = 'soundcloud';
+  $('title-search-toggle').addEventListener('click', function () { showSearchPanel(true); });
+  $('search-close').addEventListener('click', function () { showSearchPanel(false); });
+  $('search-backdrop').addEventListener('click', function () { showSearchPanel(false); });
+  $('title-search').addEventListener('submit', function (e) { e.preventDefault(); titleSearch(searchSource); });
+  Array.prototype.forEach.call(document.querySelectorAll('.search-tab'), function (tab) { tab.addEventListener('click', function () {
+    searchSource = tab.getAttribute('data-source');
+    Array.prototype.forEach.call(document.querySelectorAll('.search-tab'), function (x) { x.classList.toggle('active', x === tab); x.setAttribute('aria-selected', String(x === tab)); });
+  }); });
   var savedTheme = store('theme');
   if (savedTheme === 'light' || savedTheme === 'dark') applyTheme(savedTheme);
   $('theme').addEventListener('click', toggleTheme);
