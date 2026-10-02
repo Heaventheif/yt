@@ -46,9 +46,24 @@ def slim(d):
     if not fmts and d.get("url"):
         fmts = [_slim_format({**d, "format_id": "0", "ext": d.get("ext") or "mp4",
                               "protocol": d.get("protocol") or "https"})]
-    return {"title": d.get("title"), "uploader": d.get("uploader") or d.get("channel"),
+    return {"title": d.get("title"), "webpage_url": d.get("webpage_url") or d.get("original_url"),
+            "uploader": d.get("uploader") or d.get("channel"),
             "duration": d.get("duration"), "thumbnail": d.get("thumbnail"),
             "extractor": str(d.get("extractor_key") or ""), "formats": fmts}
+
+
+def search_soundcloud(query):
+    """يحوّل عنوان أغنية إلى رابط SoundCloud عام بلا حاجة إلى Client ID."""
+    query = re.sub(r"\s+", " ", (query or "").strip())
+    if len(query) < 2 or len(query) > 200:
+        raise ValueError("اكتب عنوان أغنية أطول قليلا")
+    info = extract_raw("scsearch1:" + query, cookies=False)
+    url = info.get("webpage_url")
+    host = (urlsplit(url).hostname or "").lower().rstrip(".") if url else ""
+    if not url or not (host == "soundcloud.com" or host.endswith(".soundcloud.com")):
+        raise RuntimeError("لم أجد أغنية مطابقة على SoundCloud")
+    return {"url": url, "title": info.get("title"), "uploader": info.get("uploader"),
+            "thumbnail": info.get("thumbnail"), "duration": info.get("duration")}
 
 
 def ytdl_opts(clients=None, cookies=True):

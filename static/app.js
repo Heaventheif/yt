@@ -71,13 +71,19 @@
   /* ---------- البحث والعرض ---------- */
   async function search(raw) {
     var url = extractUrl(raw);
-    if (!/^(https?|intent|vnd\.youtube)/i.test(url)) { status('الصق رابطا صحيحا يبدأ بـ http.', 'err'); return; }
-    status('جارٍ تحليل الرابط… قد يستغرق أول طلب نحو دقيقة إن كانت الخدمة نائمة.');
+    var titleSearch = !/^(https?|intent|vnd\.youtube)/i.test(url);
+    if (titleSearch && url.length < 2) { status('اكتب رابطا أو عنوان أغنية.', 'err'); return; }
+    status(titleSearch ? 'جارٍ العثور على الأغنية في SoundCloud…' : 'جارٍ تحليل الرابط… قد يستغرق أول طلب نحو دقيقة إن كانت الخدمة نائمة.');
     $('go').disabled = true;
     var t0 = performance.now();
     try {
-      var q = '/web/info?url=' + encodeURIComponent(url) + (state.advanced ? '&detail=all' : '');
-      var d = await jget(q);
+      var d;
+      if (titleSearch) {
+        var found = await jget('/web/search?q=' + encodeURIComponent(url));
+        if (!found.ok || !found.url) throw new Error(found.error || 'لم أجد أغنية مطابقة');
+        url = found.url;
+      }
+      d = await jget('/web/info?url=' + encodeURIComponent(url) + (state.advanced ? '&detail=all' : ''));
       if (!d.ok) throw new Error(d.error || 'فشل جلب المعلومات');
       state.url = url; state.data = d;
       beacon('info_miss', Math.round(performance.now() - t0));

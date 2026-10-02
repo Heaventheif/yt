@@ -18,7 +18,7 @@ import observability
 from config import (CORS_ORIGINS, DL_RATE_LIMIT, INFO_MAX_AGE, MAX_FID_LEN, MAX_URL_LEN, PLAYLIST_MAX_LIMIT,
                     TELEMETRY_ENABLED, THUMB_MAX_BYTES, THUMB_RATE_LIMIT, WARMUP, WEB_PUBLIC)
 from cookies_util import COOKIE_STATS
-from extractor import warmup
+from extractor import search_soundcloud, warmup
 from formats import detail_options, get_fmt, info_payload, pick_fid
 from info_cache import _cache as INFO_CACHE, get_info, get_playlist, remember_original
 from pages import DOCS_HTML, ENCODE_HTML
@@ -113,7 +113,7 @@ def guard():
         elif p == "/web/telemetry":
             if not rate_ok(60, "tele"):
                 return Response(status=204)
-        elif (p in ("/web/info", "/web/playlist")) and not rate_ok():
+        elif (p in ("/web/info", "/web/playlist", "/web/search")) and not rate_ok():
             return busy
         return None
     if not auth_ok():
@@ -247,6 +247,18 @@ def web_info(url):
     payload["thumbnail"] = _thumb_proxy(payload.get("thumbnail"))
     payload["detail"] = detail_options(info) if request.args.get("detail") == "all" else None
     return etag_json(payload)
+
+
+@app.get("/web/search")
+def web_search():
+    query = re.sub(r"\s+", " ", request.args.get("q", "").strip())
+    if len(query) < 2 or len(query) > 200:
+        return jerr("اكتب عنوان أغنية صالحا (من حرفين إلى 200 حرف)", 400)
+    try:
+        result = search_soundcloud(query)
+        return etag_json({"ok": True, **result}, 120)
+    except Exception as e:
+        return err(e)
 
 
 @app.get("/web/thumb")
