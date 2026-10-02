@@ -181,6 +181,12 @@ def is_youtube(url):
     return host == "youtu.be" or host.endswith(("youtube.com", "youtube-nocookie.com"))
 
 
+def is_soundcloud(url):
+    m = re.match(r"^https?://([^/:?#]+)", url)
+    host = (m.group(1) if m else "").lower().rstrip(".")
+    return host == "soundcloud.com" or host.endswith(".soundcloud.com")
+
+
 def _has_adaptive(info):
     """هل فيها مسار فيديو أو صوت منفصل بروابط مباشرة (أساس الجودات العالية والصوت)؟"""
     for f in info.get("formats", []):
@@ -320,7 +326,9 @@ def smart_extract(url):
     if is_youtube(url):
         return _extract_youtube(url)
     t = time.time()
-    info = _with_backoff(lambda: extract_raw(url))
+    # كوكيز يوتيوب قد تكون غير صالحة أو تغيّر استجابة SoundCloud؛ لا نرسلها
+    # إلى خدمة أخرى لا تحتاجها أصلًا.
+    info = _with_backoff(lambda: extract_raw(url, cookies=not is_soundcloud(url)))
     log(f"{info.get('extractor')} extract={time.time() - t:.1f}s")
     return info
 
