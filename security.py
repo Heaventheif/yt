@@ -15,6 +15,9 @@ def auth_ok():
 
 
 def client_ip():
+    vip = (request.headers.get("X-Vercel-Forwarded-For") or "").split(",")[0].strip()
+    if vip:   # يضبطه Vercel بنفسه ولا يمكن للعميل تزويره
+        return vip
     parts = [p.strip() for p in request.headers.get("X-Forwarded-For", "").split(",") if p.strip()]
     if parts:
         hops = TRUSTED_PROXY_HOPS   # 0 = السلوك القديم (أول عنوان). N>0 = من اليمين، أصعب على التزوير

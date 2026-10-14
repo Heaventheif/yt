@@ -1,6 +1,26 @@
 """كل الإعدادات (متغيرات البيئة) والثوابت في مكان واحد."""
 import os
 
+# ---- Vercel: نظام الملفات للقراءة فقط عدا /tmp، ولا عمليات خلفية دائمة ----
+ON_VERCEL = bool(os.getenv("VERCEL"))
+if ON_VERCEL:
+    os.environ.setdefault("HOME", "/tmp")
+    os.environ.setdefault("XDG_CACHE_HOME", "/tmp/.cache")
+    # قيم افتراضية مناسبة للدوال (Serverless)؛ أي متغير يُضبط من لوحة Vercel يتغلّب عليها.
+    for _k, _v in {
+        "WARMUP": "0",               # لا خيوط تسخين عند البدء البارد
+        "ENABLE_POT": "0",           # سيرفر PO Token (node خلفي) غير ممكن على Vercel
+        "KEEP_ALIVE_MINUTES": "0",   # لا حاجة لـ keep-alive
+        "TRUSTED_PROXY_HOPS": "1",   # Vercel يضبط X-Forwarded-For بعنوان العميل
+        "ALLOW_KEY_QUERY": "0",
+        "DISABLE_GENERIC": "1",
+        "MAX_CONCURRENT": "2",
+        "MAX_DOWNLOADS": "6",
+        "MAX_MERGES": "2",
+        "MAX_FILE_MB": "500",
+    }.items():
+        os.environ.setdefault(_k, _v)
+
 
 def _clients(value):
     return [c.strip() for c in value.split(",") if c.strip()]

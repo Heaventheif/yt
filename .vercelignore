@@ -1,0 +1,14 @@
+Dockerfile
+.dockerignore
+render.yaml
+start.sh
+requirements-docker.txt
+tests/
+bench/
+examples/
+*.md
+.git
+__pycache__/
+*.pyc
+cookies.txt
+.env

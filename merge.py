@@ -18,6 +18,16 @@ _FF = None
 _FF_CHECKED = False
 
 
+def _bundled_ffmpeg():
+    try:
+        import glob
+        import imageio_ffmpeg
+        found = sorted(glob.glob(os.path.join(os.path.dirname(imageio_ffmpeg.__file__), "binaries", "ffmpeg*")))
+        return found[0] if found else None
+    except Exception:
+        return None
+
+
 def ffmpeg_path():
     global _FF, _FF_CHECKED
     if not _FF_CHECKED:
@@ -27,6 +37,16 @@ def ffmpeg_path():
             try:
                 import imageio_ffmpeg
                 _FF = imageio_ffmpeg.get_ffmpeg_exe()
+            except Exception:
+                _FF = _bundled_ffmpeg()   # imageio يرفض الثنائي إن فقد صلاحية التنفيذ: نبحث عنه مباشرة
+        if _FF and not os.access(_FF, os.X_OK):
+            # حزم الدوال قد تفقد صلاحية التنفيذ: ننسخ الثنائي إلى /tmp (قابل للكتابة) ونمنحه الصلاحية
+            try:
+                dst = "/tmp/ffmpeg-bin"
+                if not os.path.exists(dst):
+                    shutil.copyfile(_FF, dst)
+                os.chmod(dst, 0o755)
+                _FF = dst
             except Exception:
                 _FF = None
     return _FF

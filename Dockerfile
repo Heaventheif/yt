@@ -4,7 +4,7 @@ FROM python:3.12-slim AS pybuild
 ENV PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
-COPY requirements.txt .
+COPY requirements-docker.txt requirements.txt
 RUN pip install -r requirements.txt \
  && pip show bgutil-ytdlp-pot-provider | awk '/^Version:/{print $2}' > /opt/bgutil.ver
 

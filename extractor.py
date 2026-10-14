@@ -1,6 +1,7 @@
 """الاستخراج عبر yt-dlp مع طابور محدود يمنع إغراق الخادم."""
 import os
 import re
+import shutil
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
@@ -113,13 +114,34 @@ def _run_search(search_url):
         _EXTRACT_QUEUE.release()
 
 
+_JS_RUNTIMES = None
+
+
+def js_runtimes():
+    """node من النظام إن وُجد، وإلا الثنائي المرفق عبر حزمة nodejs-wheel-binaries (Vercel بلا node)."""
+    global _JS_RUNTIMES
+    if _JS_RUNTIMES is None:
+        _JS_RUNTIMES = {"node": {}}
+        if not shutil.which("node"):
+            try:
+                import nodejs_wheel
+                exe = os.path.join(os.path.dirname(nodejs_wheel.__file__), "bin", "node")
+                if os.path.exists(exe):
+                    if not os.access(exe, os.X_OK):
+                        os.chmod(exe, 0o755)
+                    _JS_RUNTIMES = {"node": {"path": exe}}
+            except Exception:
+                pass
+    return _JS_RUNTIMES
+
+
 def ytdl_opts(clients=None, cookies=True):
     yt_args = {"skip": ["hls", "dash", "translated_subs"]}
     player_clients = YT_CLIENTS if clients is None else clients
     if player_clients:
         yt_args["player_client"] = player_clients
     opts = {"quiet": True, "no_warnings": True, "noplaylist": True, "skip_download": True,
-            "socket_timeout": 20, "retries": 2, "js_runtimes": {"node": {}},
+            "socket_timeout": 20, "retries": 2, "js_runtimes": js_runtimes(), "cachedir": False,
             "ignore_no_formats_error": True, "check_formats": False, "extractor_retries": 1,
             "extractor_args": {"youtube": yt_args}}
     if DISABLE_GENERIC:
