@@ -48,7 +48,7 @@ async function kordDownloads(url) {
       errors.push(`${request.path}: ${error.message}`);
     }
   }
-  const links = [...new Set(responses.flatMap(findLinks))];
+  const links = [...new Set(responses.flatMap((item) => findLinks(item)))];
   if (!links.length) {
     if (errors.some((item) => item.includes("HTTP 402"))) {
       throw new Error("خدمة Kord متوقفة أو معطلة حاليًا (HTTP 402 DEPLOYMENT_DISABLED)؛ لا يمكن إصلاح ذلك من داخل التطبيق.");
