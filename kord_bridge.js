@@ -31,7 +31,8 @@ async function getJson(base, path, params, headers) {
 }
 
 async function kordDownloads(url) {
-  const base = (process.env.KORD_API_BASE_URL || "https://api.kord.live").replace(/\/$/, "");
+  // api.kord.live هو موقع التوثيق؛ واجهة API المذكورة في المثال تعمل على kord-api.vercel.app.
+  const base = (process.env.KORD_API_BASE_URL || "https://kord-api.vercel.app").replace(/\/$/, "");
   const headers = { Accept: "application/json" };
   if (process.env.KORD_API_KEY) headers.Authorization = `Bearer ${process.env.KORD_API_KEY}`;
   const responses = [];
