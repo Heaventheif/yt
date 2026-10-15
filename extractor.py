@@ -297,6 +297,13 @@ def is_soundcloud(url):
     return host == "soundcloud.com" or host.endswith(".soundcloud.com")
 
 
+_KORD_HEADERS = {
+    "User-Agent": ("Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 "
+                   "(KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"),
+    "Accept": "*/*",
+}
+
+
 def _extract_youtube_kord(url):
     """استخراج روابط YouTube من Kord API فقط."""
     bridge = os.path.join(os.path.dirname(__file__), "kord_bridge.js")
@@ -330,6 +337,7 @@ def _extract_youtube_kord(url):
         formats.append({
             "format_id": f"kord_{index}", "url": direct,
             "ext": "mp3" if audio else "mp4", "protocol": "https",
+            "http_headers": dict(_KORD_HEADERS),
             "vcodec": "none" if audio else "h264",
             "acodec": "mp3" if audio else "mp4a.40.2",
             "abr": 128 if audio else None, "height": None,

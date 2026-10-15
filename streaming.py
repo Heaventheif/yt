@@ -101,6 +101,14 @@ def open_upstream(fmt, cstart=0, cend=None):
             time.sleep(0.5 * 2 ** attempt)
             continue
         break
+    # بعض مضيفي التحويل يردّون 404/403/416 على طلب Range؛ نعيد المحاولة بلا Range
+    if r.status_code in (400, 403, 404, 416) and cstart == 0:
+        r.close()
+        try:
+            r = sess.get(fmt["url"], headers=dict(fmt.get("http_headers") or {}),
+                         stream=True, timeout=UPSTREAM_TIMEOUT)
+        except Exception as e:
+            raise RuntimeError("تعذر الاتصال بمصدر الملف: " + type(e).__name__)
     if r.status_code == 206:
         m = re.match(r"bytes (\d+)-(\d+)/(\d+|\*)", r.headers.get("Content-Range", ""))
         total = int(m.group(3)) if m and m.group(3).isdigit() else None
