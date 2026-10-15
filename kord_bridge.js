@@ -50,7 +50,12 @@ async function kordDownloads(url) {
     }
   }
   const links = [...new Set(responses.flatMap(findLinks))];
-  if (!links.length) throw new Error(`Kord لم يُرجع روابط تنزيل (${errors.join("; ") || "استجابة بلا روابط"})`);
+  if (!links.length) {
+    if (errors.some((item) => item.includes("HTTP 402"))) {
+      throw new Error("خدمة Kord متوقفة أو معطلة حاليًا (HTTP 402 DEPLOYMENT_DISABLED)؛ لا يمكن إصلاح ذلك من داخل التطبيق.");
+    }
+    throw new Error(`Kord لم يُرجع روابط تنزيل (${errors.join("; ") || "استجابة بلا روابط"})`);
+  }
   const videoId = videoIdFrom(url);
   const title = responses.map((x) => x?.title || x?.data?.title || x?.result?.title).find(Boolean) || "YouTube Video";
   return {
