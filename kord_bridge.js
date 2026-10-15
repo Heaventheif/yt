@@ -48,7 +48,9 @@ async function kordDownloads(url) {
       errors.push(`${request.path}: ${error.message}`);
     }
   }
-  const links = [...new Set(responses.flatMap((item) => findLinks(item)))];
+  const links = responses.flatMap((item, sourceIndex) =>
+    findLinks(item).map((url) => ({ url, sourceIndex }))
+  ).filter((item, index, list) => list.findIndex((candidate) => candidate.url === item.url) === index);
   if (!links.length) {
     if (errors.some((item) => item.includes("HTTP 402"))) {
       throw new Error("خدمة Kord متوقفة أو معطلة حاليًا (HTTP 402 DEPLOYMENT_DISABLED)؛ لا يمكن إصلاح ذلك من داخل التطبيق.");
@@ -63,10 +65,10 @@ async function kordDownloads(url) {
       title,
       thumbnail: videoId ? `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg` : null,
       type: "video",
-      downloads: links.map((link, index) => ({
-        type: /mp3|audio/i.test(link) || index === 0 ? "audio" : "video",
-        quality: index === 0 ? "mp3" : "720p",
-        url: link,
+      downloads: links.map((item) => ({
+        type: item.sourceIndex === 0 ? "audio" : "video",
+        quality: item.sourceIndex === 0 ? "mp3" : "720p",
+        url: item.url,
       })),
     },
   };
