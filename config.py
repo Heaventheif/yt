@@ -49,6 +49,7 @@ YT_CLIENTS = _clients(os.getenv("YT_CLIENTS", ""))   # عملاء المحاول
 YT_NOAUTH_CLIENTS = _clients(os.getenv("YT_NOAUTH_CLIENTS", "default,android_vr"))
 YT_TRY_NO_COOKIES = os.getenv("YT_TRY_NO_COOKIES", "1") == "1"
 YT_ALLOW_COOKIES = os.getenv("YT_ALLOW_COOKIES", "1") == "1"
+YT_POT_CLIENTS = _clients(os.getenv("YT_POT_CLIENTS", "mweb,tv,web_safari"))
 YT_FALLBACKS = [_clients(x) for x in os.getenv("YT_FALLBACK_CLIENTS", "tv;mweb").split(";") if x.strip()]
 
 KEEP_ALIVE_MIN = int(os.getenv("KEEP_ALIVE_MINUTES", "10"))

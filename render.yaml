@@ -13,6 +13,8 @@ services:
         sync: false
       - key: ENABLE_POT
         value: "1"
+      - key: YT_POT_CLIENTS
+        value: "mweb,tv,web_safari"
       - key: AUTO_UPDATE
         value: "0"
       - key: WEB_PUBLIC

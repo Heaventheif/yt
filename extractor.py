@@ -10,7 +10,8 @@ from urllib.parse import urljoin, urlsplit
 import yt_dlp
 
 from config import (EXTRACT_QUEUE_MULTIPLIER, EXTRACT_WAIT_SEC, MAX_EXTRACT, PROBE_ENABLED, PROBE_TIMEOUT, PROXY,
-                    WARMUP_URL, YT_ALLOW_COOKIES, YT_CLIENTS, YT_FALLBACKS, YT_NOAUTH_CLIENTS, YT_TRY_NO_COOKIES)
+                    WARMUP_URL, YT_ALLOW_COOKIES, YT_CLIENTS, YT_FALLBACKS, YT_NOAUTH_CLIENTS, YT_POT_CLIENTS,
+                    YT_TRY_NO_COOKIES)
 from cookies_util import COOKIES_PATH
 from config import DISABLE_GENERIC
 from errors import Busy
@@ -311,7 +312,8 @@ def _client_order():
     """قائمة محاولات (عملاء، هل نستخدم الكوكيز). الأولى بلا كوكيز لأنها وحدها تُبقي عملاء الصيغ المنفصلة."""
     now = time.time()
     recent = _last_good_client if _last_good_client is not None and now - _last_good_at < _CLIENT_TTL else None
-    base = ([(YT_NOAUTH_CLIENTS or None, False)] if YT_TRY_NO_COOKIES else []) + [(None, True)] + \
+    pot = [(YT_POT_CLIENTS, False)] if os.getenv("ENABLE_POT", "0") == "1" and YT_POT_CLIENTS else []
+    base = pot + ([(YT_NOAUTH_CLIENTS or None, False)] if YT_TRY_NO_COOKIES else []) + [(None, True)] + \
            [(cl, True) for cl in YT_FALLBACKS]
     order = []
     # لا نقدّم محاولة قديمة بالكوكيز على التجربة السريعة بلا كوكيز؛
