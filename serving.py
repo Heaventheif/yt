@@ -125,6 +125,43 @@ def _serve_ffmpeg(url, info, fmts, make_plan, slot, check):
             merge.MUX_SLOTS.release()
 
 
+def _serve_hls(info, fmt, slot, check, mp3_kbps=None):
+    """يبث صوت SoundCloud المقدم كقائمة m3u8 عبر FFmpeg مباشرة."""
+    approx = fmt.get("filesize") or fmt.get("filesize_approx")
+    if check:
+        return jsonify(ok=True, size=approx, merged=True), False
+    if not merge.MUX_SLOTS.acquire(blocking=False):
+        return jerr("عمليات الدمج/التحويل مشغولة، حاول بعد قليل", 429), False
+    mux_held = True
+    try:
+        if mp3_kbps:
+            args = ["-vn", "-map", "0:a:0", "-c:a", "libmp3lame", "-b:a", f"{int(mp3_kbps)}k",
+                    "-write_xing", "0", "-id3v2_version", "3", "-f", "mp3"]
+            ext, content_type = "mp3", "audio/mpeg"
+        else:
+            args = ["-vn", "-map", "0:a:0", "-c:a", "copy", "-movflags",
+                    "+frag_keyframe+empty_moov+default_base_moof", "-f", "mp4"]
+            ext, content_type = "m4a", "audio/mp4"
+        proc, stop, threads, errbuf = merge.start_url_job(fmt, args)
+        first = proc.stdout.read1(262144)
+        if not first:
+            msg = merge.error_text(errbuf)
+            merge.stop_merge(proc, stop, threads)
+            print(f"[FFMPEG HLS] failed code={proc.poll()} {msg}", flush=True)
+            return jerr("تعذر بث صوت SoundCloud، جرّب نتيجة أخرى", 502), False
+        headers = {"Content-Type": content_type,
+                   "Content-Disposition": disposition(_file_title(info, {"ext": ext}), ext),
+                   "Cache-Control": "no-store", "Accept-Ranges": "none", "X-Accel-Buffering": "no"}
+        job = merge.MergeJob(proc, stop, threads, slot)
+        resp = Response(merge.merged_chunks(job, first), status=200, headers=headers)
+        resp.call_on_close(job.release)
+        mux_held = False
+        return resp, True
+    finally:
+        if mux_held:
+            merge.MUX_SLOTS.release()
+
+
 def serve(url, fid, check=False, per_ip=False):
     """check=True: يتحقق فقط ويرجع الحجم دون تنزيل"""
     info = get_info(url)
@@ -144,6 +181,9 @@ def serve(url, fid, check=False, per_ip=False):
         return jerr("الخادم مشغول بتنزيلات أخرى، حاول بعد قليل", 429)
     handed_off = False
     try:
+        if fmt.get("protocol") in ("m3u8", "m3u8_native"):
+            resp, handed_off = _serve_hls(info, fmt, slot, check, mp3[1] if mp3 else None)
+            return resp
         if pair:
             resp, handed_off = _serve_ffmpeg(url, info, list(pair), lambda f, i: merge.plan_merge(*f), slot, check)
             return resp

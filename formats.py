@@ -11,7 +11,8 @@ import re
 import merge
 from config import MP3_BITRATES, MP3_ENABLED
 
-DIRECT_PROTOCOLS = ("http", "https")
+# SoundCloud الحديث يعيد مسارات الصوت عبر HLS؛ تُبث عبر FFmpeg في serving.py.
+DIRECT_PROTOCOLS = ("http", "https", "m3u8", "m3u8_native")
 DEFAULT_HEIGHT = 720
 _CODEC_NAMES = (("avc1", "H.264"), ("h264", "H.264"), ("vp09", "VP9"), ("vp9", "VP9"), ("av01", "AV1"),
                 ("hev1", "H.265"), ("hvc1", "H.265"), ("vp8", "VP8"))

@@ -142,6 +142,22 @@ def start_job(plan, ups):
     return proc, stop, threads, err
 
 
+def start_url_job(fmt, args):
+    """يشغّل FFmpeg مباشرة على HLS؛ لا يمكن تمرير قائمة m3u8 عبر requests كملف عادي."""
+    ff = ffmpeg_path()
+    headers = fmt.get("http_headers") or {}
+    cmd = [ff, "-hide_banner", "-loglevel", "error", "-nostdin", "-threads", "1"]
+    if headers:
+        cmd += ["-headers", "".join(f"{k}: {v}\r\n" for k, v in headers.items())]
+    cmd += ["-i", fmt["url"], *args, "pipe:1"]
+    proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    stop = threading.Event()
+    err = []
+    thread = threading.Thread(target=_drain, args=(proc.stderr, err), daemon=True)
+    thread.start()
+    return proc, stop, [thread], err
+
+
 def stop_merge(proc, stop, threads):
     stop.set()
     try:
