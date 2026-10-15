@@ -373,10 +373,11 @@ def _extract_youtube_scrapr(url):
     node = shutil.which("node")
     if not node or not os.path.isfile(bridge):
         raise RuntimeError("scrapr غير متاح في بيئة التشغيل")
+    timeout = sum(PROBE_TIMEOUT) * 5 if isinstance(PROBE_TIMEOUT, tuple) else PROBE_TIMEOUT * 5
     try:
         proc = subprocess.run(
             [node, bridge], input=json.dumps({"url": url}), text=True,
-            capture_output=True, timeout=max(45, PROBE_TIMEOUT * 5), check=False,
+            capture_output=True, timeout=max(45, timeout), check=False,
         )
     except subprocess.TimeoutExpired as exc:
         raise RuntimeError("انتهت مهلة scrapr أثناء تجهيز رابط YouTube") from exc
