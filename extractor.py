@@ -1,7 +1,9 @@
 """الاستخراج عبر yt-dlp مع طابور محدود يمنع إغراق الخادم."""
+import json
 import os
 import re
 import shutil
+import subprocess
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
@@ -365,6 +367,50 @@ def _extract_youtube(url):
     _raise_youtube_failure(first_code, first_err)
 
 
+def _extract_youtube_scrapr(url):
+    """استخدم محول scrapr الخارجي عندما يحجب YouTube yt-dlp على الخادم."""
+    bridge = os.path.join(os.path.dirname(__file__), "scrapr_bridge.js")
+    node = shutil.which("node")
+    if not node or not os.path.isfile(bridge):
+        raise RuntimeError("scrapr غير متاح في بيئة التشغيل")
+    try:
+        proc = subprocess.run(
+            [node, bridge], input=json.dumps({"url": url}), text=True,
+            capture_output=True, timeout=max(45, PROBE_TIMEOUT * 5), check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError("انتهت مهلة scrapr أثناء تجهيز رابط YouTube") from exc
+    if proc.returncode != 0:
+        detail = (proc.stderr or "").strip().replace("\n", " ")
+        raise RuntimeError(detail[:300] or "فشل scrapr في تجهيز رابط YouTube")
+    try:
+        payload = json.loads(proc.stdout)
+        result = payload["result"]
+        downloads = result.get("downloads") or []
+    except (ValueError, KeyError, TypeError) as exc:
+        raise RuntimeError("أعاد scrapr استجابة غير صالحة") from exc
+    formats = []
+    for index, item in enumerate(downloads):
+        direct = item.get("url")
+        if not direct or not is_public_url(direct):
+            continue
+        kind = str(item.get("type") or "").lower()
+        audio = "mp3" in kind or "audio" in kind
+        formats.append({
+            "format_id": f"scrapr_{index}", "url": direct,
+            "ext": "mp3" if audio else "mp4", "protocol": "https",
+            "vcodec": "none" if audio else "h264",
+            "acodec": "mp3" if audio else "mp4a.40.2",
+            "abr": 128 if audio else None, "height": None,
+        })
+    if not formats:
+        raise RuntimeError("لم يُرجع scrapr رابط تنزيل صالحًا")
+    return {"title": result.get("title") or "YouTube Video",
+            "webpage_url": url, "uploader": None,
+            "duration": None, "thumbnail": result.get("thumbnail"),
+            "extractor": "scrapr", "formats": formats}
+
+
 def _raise_youtube_failure(code, err):
     if code is None and err:
         raise err
@@ -442,7 +488,17 @@ def smart_extract(url):
         log(f"resolved redirect: {url} -> {resolved}")
         url = resolved
     if is_youtube(url):
-        return _extract_youtube(url)
+        try:
+            info = _extract_youtube_scrapr(url)
+            log(f"scrapr YouTube formats={len(info['formats'])}")
+            return info
+        except Exception as scrapr_error:
+            log(f"scrapr YouTube failed; trying yt-dlp: {str(scrapr_error)[:180]}")
+            try:
+                return _extract_youtube(url)
+            except Exception as yt_error:
+                log(f"yt-dlp YouTube fallback failed: {str(yt_error)[:180]}")
+                raise scrapr_error
     t = time.time()
     # كوكيز يوتيوب قد تكون غير صالحة أو تغيّر استجابة SoundCloud؛ لا نرسلها
     # إلى خدمة أخرى لا تحتاجها أصلًا.

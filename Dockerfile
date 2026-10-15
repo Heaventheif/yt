@@ -18,7 +18,11 @@ RUN VER=$(cat /tmp/bgutil.ver) \
    || git clone --depth 1 https://github.com/Brainicism/bgutil-ytdlp-pot-provider.git /opt/bgutil ) \
  && cd /opt/bgutil/server && npm ci --no-audit --no-fund && npx tsc \
  && npm prune --omit=dev --no-audit --no-fund \
- && rm -rf /opt/bgutil/.git /opt/bgutil/server/src /root/.npm
+ && rm -rf /opt/bgutil/.git /opt/bgutil/server/src /root/.npm \
+ && mkdir -p /opt/scrapr \
+ && cd /opt/scrapr && npm init -y >/dev/null 2>&1 \
+ && npm install --omit=optional --no-audit --no-fund @coflyn/scrapr@1.3.0 \
+ && rm -rf /root/.npm
 
 # ---- 3) الصورة النهائية: python:slim + ملف node فقط ----
 FROM python:3.12-slim
@@ -27,12 +31,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
  && useradd --create-home --uid 10001 app
 COPY --from=nodebuild /usr/local/bin/node /usr/local/bin/node
 COPY --from=nodebuild /opt/bgutil/server /opt/bgutil/server
+COPY --from=nodebuild /opt/scrapr /opt/scrapr
 COPY --from=pybuild /opt/venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH" \
+    NODE_PATH="/opt/scrapr/node_modules" \
     PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
 
 WORKDIR /app
-COPY *.py start.sh ./
+COPY *.py scrapr_bridge.js start.sh ./
 COPY static ./static
 RUN chmod +x start.sh
 USER app
