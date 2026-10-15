@@ -7,6 +7,8 @@
   var IS_TV = /Tizen|Web0S|WebOS|SMART-TV|SmartTV|HbbTV|Android TV|AFTM|BRAVIA/i.test(navigator.userAgent);
   var CAN_OFFLINE = !IS_TV && 'serviceWorker' in navigator && 'caches' in window && 'indexedDB' in window && window.Ledger;
   var state = { url: '', data: null, tab: 'video', advanced: false, abort: null };
+  var API_BASE = (window.__API_BASE__ || 'https://ytdlp-api-gukc.onrender.com').replace(/\/$/, '');
+  function apiUrl(path) { return /^https?:\/\//i.test(path) ? path : API_BASE + path; }
 
   function el(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
   function sleep(ms, signal) {
@@ -61,7 +63,7 @@
     }
   }
   async function jget(u, init) {
-    var r; try { r = await fetchRetry(u, init, 3); } catch (e) { if (e.name === 'AbortError') throw e; throw new Error('تعذر الاتصال بالخدمة. تحقق من الشبكة وأعد المحاولة.'); }
+    var r; try { r = await fetchRetry(apiUrl(u), init, 3); } catch (e) { if (e.name === 'AbortError') throw e; throw new Error('تعذر الاتصال بالخدمة. تحقق من الشبكة وأعد المحاولة.'); }
     var j = null; try { j = await r.json(); } catch (e) { /* لا JSON */ }
     if (!j) throw new Error(r.status >= 500 ? 'الخدمة غير متاحة الآن، انتظر دقيقة ثم أعد المحاولة.' : 'ردّ غير متوقع من الخدمة.');
     return j;
@@ -207,7 +209,7 @@
     try {
       var j = await jget('/web/dl?' + q + '&check=1');
       if (!j.ok) throw new Error(j.error || 'فشل التحضير');
-      var a = document.createElement('a'); a.href = '/web/dl?' + q; document.body.appendChild(a); a.click(); a.remove();
+      var a = document.createElement('a'); a.href = apiUrl('/web/dl?' + q); document.body.appendChild(a); a.click(); a.remove();
       beacon('dl_ok');
       note.className = 'note ok'; note.textContent = 'بدأ التنزيل. إن لم يبدأ، جرّب صيغة أخرى.';
     } catch (e) {
@@ -248,7 +250,7 @@
           var s = i * CHUNK, e = Math.min(s + CHUNK, head.size) - 1, key = '/_c/' + id + '/' + i;
           await Ledger.reserve(key, e - s + 1, { kind: 'media', item: id, pinned: true });
           try {
-            var r = await fetchRetry(base, { headers: { Range: 'bytes=' + s + '-' + e }, signal: ctl.signal });
+            var r = await fetchRetry(apiUrl(base), { headers: { Range: 'bytes=' + s + '-' + e }, signal: ctl.signal });
             if (r.status !== 206) throw new Error('الخادم لم يدعم الاستئناف لهذه الصيغة.');
             var buf = await r.arrayBuffer();
             if (buf.byteLength !== e - s + 1) throw new Error('انقطع الاتصال قبل اكتمال الجزء.');
