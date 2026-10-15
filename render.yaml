@@ -7,16 +7,12 @@ services:
     envVars:
       - key: API_KEY
         generateValue: true
-      - key: KORD_API_KEY
-        sync: false
       - key: COOKIES_B64
         sync: false
       - key: SENTRY_DSN          # اختياري (يتطلب إضافة sentry-sdk إلى requirements.txt)
         sync: false
       - key: ENABLE_POT
         value: "1"
-      - key: YT_POT_CLIENTS
-        value: "mweb,tv,web_safari"
       - key: AUTO_UPDATE
         value: "0"
       - key: WEB_PUBLIC

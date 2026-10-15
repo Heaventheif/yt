@@ -11,9 +11,8 @@ from urllib.parse import urljoin, urlsplit
 
 import yt_dlp
 
-from config import (EXTRACT_QUEUE_MULTIPLIER, EXTRACT_WAIT_SEC, MAX_EXTRACT, PROBE_ENABLED, PROBE_TIMEOUT, PROXY,
-                    WARMUP_URL, YT_ALLOW_COOKIES, YT_CLIENTS, YT_FALLBACKS, YT_NOAUTH_CLIENTS, YT_POT_CLIENTS,
-                    YT_TRY_NO_COOKIES)
+from config import (EXTRACT_QUEUE_MULTIPLIER, EXTRACT_WAIT_SEC, MAX_EXTRACT, PROBE_TIMEOUT, PROXY,
+                    WARMUP_URL, YT_CLIENTS)
 from cookies_util import COOKIES_PATH
 from config import DISABLE_GENERIC
 from errors import Busy
@@ -29,9 +28,6 @@ OK_CODES = (200, 206)
 KEEP_FIELDS = ("format_id", "url", "ext", "protocol", "vcodec", "acodec", "height", "tbr", "abr",
                "filesize", "filesize_approx", "http_headers", "fps")
 
-_last_good_client = None
-_last_good_at = 0.0
-_CLIENT_TTL = 900
 _SCDL_CLIENT = None
 
 
@@ -301,78 +297,12 @@ def is_soundcloud(url):
     return host == "soundcloud.com" or host.endswith(".soundcloud.com")
 
 
-def _has_adaptive(info):
-    """هل فيها مسار فيديو أو صوت منفصل بروابط مباشرة (أساس الجودات العالية والصوت)؟"""
-    for f in info.get("formats", []):
-        if f.get("protocol") in ("http", "https") and f.get("url") and f.get("ext") != "mhtml":
-            if f.get("vcodec") == "none" or f.get("acodec") == "none":
-                return True
-    return False
-
-
-def _client_order():
-    """قائمة محاولات (عملاء، هل نستخدم الكوكيز). الأولى بلا كوكيز لأنها وحدها تُبقي عملاء الصيغ المنفصلة."""
-    now = time.time()
-    recent = _last_good_client if _last_good_client is not None and now - _last_good_at < _CLIENT_TTL else None
-    pot = [(YT_POT_CLIENTS, False)] if os.getenv("ENABLE_POT", "0") == "1" and YT_POT_CLIENTS else []
-    base = pot + ([(YT_NOAUTH_CLIENTS or None, False)] if YT_TRY_NO_COOKIES else []) + [(None, True)] + \
-           [(cl, True) for cl in YT_FALLBACKS]
-    order = []
-    # لا نقدّم محاولة قديمة بالكوكيز على التجربة السريعة بلا كوكيز؛
-    # المحاولة الناجحة المحفوظة تضاف في النهاية فقط كتحسين لاحق.
-    candidates = base + ([recent] if recent is not None else [])
-    if not YT_ALLOW_COOKIES:
-        candidates = [a for a in candidates if not a[1]]
-    for a in candidates:
-        if a is not None and a not in order:
-            order.append(a)
-    return order
-
-
-def _extract_youtube(url):
-    global _last_good_client, _last_good_at
-    first_err, first_code, weak = None, None, None
-    for attempt in _client_order():
-        cl, use_cookies = attempt
-        name = (",".join(cl) if cl else "default") + ("" if use_cookies else "+nocookies")
-        t0 = time.time()
-        try:
-            info = extract_raw(url, cl, use_cookies)
-        except Busy:
-            raise
-        except Exception as e:
-            log(f"youtube client={name} FAILED after {time.time() - t0:.1f}s: {str(e)[:220]}")
-            first_err = first_err or e
-            continue
-        t1 = time.time()
-        video, audio = collect_options(info)
-        if not (video or audio):   # نتيجة بلا صيغ مباشرة ليست نجاحاً: جرّب العميل التالي
-            log(f"youtube client={name} returned no direct formats (total={len(info.get('formats', []))})")
-            continue
-        if not _has_adaptive(info):   # 360p الجاهزة فقط: جرّب عملاء أخرى بحثا عن الصيغ المنفصلة، واحتفظ بهذه كاحتياط
-            log(f"youtube client={name} gave only muxed formats (total={len(info.get('formats', []))}); trying next")
-            weak = weak or info
-            continue
-        code = probe(info) if PROBE_ENABLED else 200
-        log(f"youtube client={name} extract={t1 - t0:.1f}s probe={time.time() - t1:.1f}s "
-            f"formats={len(info.get('formats', []))} http={code}")
-        if code in OK_CODES:
-            _last_good_client = attempt
-            _last_good_at = time.time()
-            return info
-        if first_code is None:
-            first_code = code
-    if weak:
-        return weak
-    _raise_youtube_failure(first_code, first_err)
-
-
-def _extract_youtube_scrapr(url):
-    """استخدم محول scrapr الخارجي عندما يحجب YouTube yt-dlp على الخادم."""
-    bridge = os.path.join(os.path.dirname(__file__), "scrapr_bridge.js")
+def _extract_youtube_kord(url):
+    """استخراج روابط YouTube من Kord API فقط."""
+    bridge = os.path.join(os.path.dirname(__file__), "kord_bridge.js")
     node = shutil.which("node")
     if not node or not os.path.isfile(bridge):
-        raise RuntimeError("scrapr غير متاح في بيئة التشغيل")
+        raise RuntimeError("Kord غير متاح في بيئة التشغيل")
     timeout = sum(PROBE_TIMEOUT) * 5 if isinstance(PROBE_TIMEOUT, tuple) else PROBE_TIMEOUT * 5
     try:
         proc = subprocess.run(
@@ -380,16 +310,16 @@ def _extract_youtube_scrapr(url):
             capture_output=True, timeout=max(45, timeout), check=False,
         )
     except subprocess.TimeoutExpired as exc:
-        raise RuntimeError("انتهت مهلة scrapr أثناء تجهيز رابط YouTube") from exc
+        raise RuntimeError("انتهت مهلة Kord أثناء تجهيز رابط YouTube") from exc
     if proc.returncode != 0:
         detail = (proc.stderr or "").strip().replace("\n", " ")
-        raise RuntimeError(detail[:300] or "فشل scrapr في تجهيز رابط YouTube")
+        raise RuntimeError(detail[:300] or "فشل Kord في تجهيز رابط YouTube")
     try:
         payload = json.loads(proc.stdout)
         result = payload["result"]
         downloads = result.get("downloads") or []
     except (ValueError, KeyError, TypeError) as exc:
-        raise RuntimeError("أعاد scrapr استجابة غير صالحة") from exc
+        raise RuntimeError("أعاد Kord استجابة غير صالحة") from exc
     formats = []
     for index, item in enumerate(downloads):
         direct = item.get("url")
@@ -398,26 +328,18 @@ def _extract_youtube_scrapr(url):
         kind = str(item.get("type") or "").lower()
         audio = "mp3" in kind or "audio" in kind
         formats.append({
-            "format_id": f"scrapr_{index}", "url": direct,
+            "format_id": f"kord_{index}", "url": direct,
             "ext": "mp3" if audio else "mp4", "protocol": "https",
             "vcodec": "none" if audio else "h264",
             "acodec": "mp3" if audio else "mp4a.40.2",
             "abr": 128 if audio else None, "height": None,
         })
     if not formats:
-        raise RuntimeError("لم يُرجع scrapr رابط تنزيل صالحًا")
+        raise RuntimeError("لم يُرجع Kord رابط تنزيل صالحًا")
     return {"title": result.get("title") or "YouTube Video",
             "webpage_url": url, "uploader": None,
             "duration": None, "thumbnail": result.get("thumbnail"),
-            "extractor": "scrapr", "formats": formats}
-
-
-def _raise_youtube_failure(code, err):
-    if code is None and err:
-        raise err
-    if code is None:
-        raise RuntimeError("لم أجد صيغ قابلة للتنزيل لهذا الرابط")
-    raise RuntimeError(f"رفض يوتيوب روابط التنزيل (HTTP {code}). حدّث الكوكيز أو جرّب لاحقا")
+            "extractor": "kord", "formats": formats}
 
 
 _TRANSIENT = ("timed out", "timeout", "connection reset", "connection aborted", "remote end closed",
@@ -489,17 +411,9 @@ def smart_extract(url):
         log(f"resolved redirect: {url} -> {resolved}")
         url = resolved
     if is_youtube(url):
-        try:
-            info = _extract_youtube_scrapr(url)
-            log(f"scrapr YouTube formats={len(info['formats'])}")
-            return info
-        except Exception as scrapr_error:
-            log(f"scrapr YouTube failed; trying yt-dlp: {str(scrapr_error)[:180]}")
-            try:
-                return _extract_youtube(url)
-            except Exception as yt_error:
-                log(f"yt-dlp YouTube fallback failed: {str(yt_error)[:180]}")
-                raise scrapr_error
+        info = _extract_youtube_kord(url)
+        log(f"kord YouTube formats={len(info['formats'])}")
+        return info
     t = time.time()
     # كوكيز يوتيوب قد تكون غير صالحة أو تغيّر استجابة SoundCloud؛ لا نرسلها
     # إلى خدمة أخرى لا تحتاجها أصلًا.
