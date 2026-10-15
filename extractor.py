@@ -29,6 +29,7 @@ KEEP_FIELDS = ("format_id", "url", "ext", "protocol", "vcodec", "acodec", "heigh
 _last_good_client = None
 _last_good_at = 0.0
 _CLIENT_TTL = 900
+_SCDL_CLIENT = None
 
 
 def log(*args):
@@ -68,7 +69,7 @@ def search_soundcloud(query):
 
 
 def search_media(query, source="soundcloud", limit=10):
-    """يبحث عن عدة نتائج قابلة للاختيار في SoundCloud أو YouTube."""
+    """يبحث عن عدة نتائج قابلة للاختيار في SoundCloud عبر scdl أو YouTube."""
     query = re.sub(r"\s+", " ", (query or "").strip())
     if len(query) < 2 or len(query) > 200:
         raise ValueError("اكتب عنوانا أطول قليلا")
@@ -80,8 +81,12 @@ def search_media(query, source="soundcloud", limit=10):
         raise Busy("الخادم مشغول بطلبات بحث أخرى، حاول بعد قليل")
     future = None
     try:
-        future = _EXTRACT_EXECUTOR.submit(_run_search, prefix + str(limit) + ":" + query)
-        return future.result(timeout=max(30, EXTRACT_WAIT_SEC + 30))
+        target = _run_scdl_search if source == "soundcloud" else _run_search
+        search_arg = (query, limit) if source == "soundcloud" else (prefix + str(limit) + ":" + query,)
+        future = _EXTRACT_EXECUTOR.submit(target, *search_arg)
+        # تهيئة عميل SoundCloud في scdl قد تحتاج طلبات إضافية في أول استدعاء.
+        timeout = max(60, EXTRACT_WAIT_SEC + 90) if source == "soundcloud" else max(30, EXTRACT_WAIT_SEC + 30)
+        return future.result(timeout=timeout)
     except FutureTimeout:
         if future and future.cancel():
             _EXTRACT_QUEUE.release()
@@ -109,6 +114,43 @@ def _run_search(search_url):
             results.append({"url": url, "title": entry.get("title") or url,
                             "uploader": entry.get("uploader") or entry.get("channel"),
                             "thumbnail": entry.get("thumbnail"), "duration": entry.get("duration")})
+        return results
+    finally:
+        _EXTRACT_QUEUE.release()
+
+
+def _run_scdl_search(query, limit):
+    """يستخدم عميل scdl الرسمي للبحث، دون تشغيل CLI أو إنشاء ملفات مؤقتة."""
+    global _SCDL_CLIENT
+    try:
+        # الاستيراد الكسول يبقي مسارات YouTube خفيفة، ويجعل فشل scdl واضحا في البحث فقط.
+        from soundcloud import SoundCloud, Track
+
+        if _SCDL_CLIENT is None:
+            _SCDL_CLIENT = SoundCloud(None)
+        client = _SCDL_CLIENT
+        results = []
+        for item in client.search(query, limit=limit):
+            if not isinstance(item, Track):
+                continue
+            url = getattr(item, "permalink_url", None)
+            if not url or not url.startswith("https://"):
+                continue
+            user = getattr(item, "user", None)
+            uploader = ((getattr(user, "full_name", None) or getattr(user, "username", None))
+                        if user else None)
+            duration_ms = getattr(item, "duration", None)
+            results.append({
+                "url": url,
+                "title": getattr(item, "title", None) or url,
+                "uploader": uploader,
+                "thumbnail": getattr(item, "artwork_url", None),
+                # SoundCloud API يعيد المدة بالميلي ثانية، والواجهة تتوقع الثواني.
+                "duration": duration_ms / 1000 if duration_ms else None,
+                "provider": "scdl",
+            })
+            if len(results) >= limit:
+                break
         return results
     finally:
         _EXTRACT_QUEUE.release()

@@ -79,7 +79,8 @@
     rows.forEach(function (row) {
       var li = el('li', 'search-result'), meta = el('div', 'search-result-meta');
       if (row.thumbnail) { var im = el('img'); im.src = row.thumbnail; im.alt = ''; im.loading = 'lazy'; meta.appendChild(im); }
-      var copy = el('div'); copy.appendChild(el('strong', null, row.title || 'بدون عنوان')); copy.appendChild(el('small', null, row.uploader || '')); meta.appendChild(copy);
+      var copy = el('div'); copy.appendChild(el('strong', null, row.title || 'بدون عنوان'));
+      copy.appendChild(el('small', null, (row.uploader || '') + (row.provider === 'scdl' ? ' · بحث scdl' : ''))); meta.appendChild(copy);
       var use = el('button', 'use-result', 'استخدم الرابط'); use.type = 'button'; use.onclick = function () { $('url').value = row.url; showSearchPanel(false); search(row.url); };
       li.appendChild(meta); li.appendChild(use); ul.appendChild(li);
     });

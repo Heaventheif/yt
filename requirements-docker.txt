@@ -2,5 +2,6 @@ flask==3.0.3
 gunicorn==22.0.0
 requests==2.32.3
 yt-dlp[default]>=2026.8.19,<2027
+scdl==3.0.8
 bgutil-ytdlp-pot-provider
 imageio-ffmpeg
