@@ -297,19 +297,19 @@ def is_soundcloud(url):
     return host == "soundcloud.com" or host.endswith(".soundcloud.com")
 
 
-_KORD_HEADERS = {
+_XALMAN_HEADERS = {
     "User-Agent": ("Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 "
                    "(KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"),
     "Accept": "*/*",
 }
 
 
-def _extract_youtube_kord(url):
-    """استخراج روابط YouTube من Kord API فقط."""
-    bridge = os.path.join(os.path.dirname(__file__), "kord_bridge.js")
+def _extract_youtube_xalman(url):
+    """استخراج روابط YouTube من Xalman API."""
+    bridge = os.path.join(os.path.dirname(__file__), "xalman_bridge.js")
     node = shutil.which("node")
     if not node or not os.path.isfile(bridge):
-        raise RuntimeError("Kord غير متاح في بيئة التشغيل")
+        raise RuntimeError("Xalman غير متاح في بيئة التشغيل")
     timeout = sum(PROBE_TIMEOUT) * 5 if isinstance(PROBE_TIMEOUT, tuple) else PROBE_TIMEOUT * 5
     try:
         proc = subprocess.run(
@@ -317,16 +317,16 @@ def _extract_youtube_kord(url):
             capture_output=True, timeout=max(45, timeout), check=False,
         )
     except subprocess.TimeoutExpired as exc:
-        raise RuntimeError("انتهت مهلة Kord أثناء تجهيز رابط YouTube") from exc
+        raise RuntimeError("انتهت مهلة Xalman أثناء تجهيز رابط YouTube") from exc
     if proc.returncode != 0:
         detail = (proc.stderr or "").strip().replace("\n", " ")
-        raise RuntimeError(detail[:300] or "فشل Kord في تجهيز رابط YouTube")
+        raise RuntimeError(detail[:300] or "فشل Xalman في تجهيز رابط YouTube")
     try:
         payload = json.loads(proc.stdout)
         result = payload["result"]
         downloads = result.get("downloads") or []
     except (ValueError, KeyError, TypeError) as exc:
-        raise RuntimeError("أعاد Kord استجابة غير صالحة") from exc
+        raise RuntimeError("أعاد Xalman استجابة غير صالحة") from exc
     formats = []
     for index, item in enumerate(downloads):
         direct = item.get("url")
@@ -335,19 +335,19 @@ def _extract_youtube_kord(url):
         kind = str(item.get("type") or "").lower()
         audio = "mp3" in kind or "audio" in kind
         formats.append({
-            "format_id": f"kord_{index}", "url": direct,
+            "format_id": f"xalman_{index}", "url": direct,
             "ext": "mp3" if audio else "mp4", "protocol": "https",
-            "http_headers": dict(_KORD_HEADERS),
+            "http_headers": dict(_XALMAN_HEADERS),
             "vcodec": "none" if audio else "h264",
             "acodec": "mp3" if audio else "mp4a.40.2",
             "abr": 128 if audio else None, "height": None,
         })
     if not formats:
-        raise RuntimeError("لم يُرجع Kord رابط تنزيل صالحًا")
+        raise RuntimeError("لم يُرجع Xalman رابط تنزيل صالحًا")
     return {"title": result.get("title") or "YouTube Video",
             "webpage_url": url, "uploader": None,
             "duration": None, "thumbnail": result.get("thumbnail"),
-            "extractor": "kord", "formats": formats}
+            "extractor": "xalman", "formats": formats}
 
 
 _TRANSIENT = ("timed out", "timeout", "connection reset", "connection aborted", "remote end closed",
@@ -419,8 +419,8 @@ def smart_extract(url):
         log(f"resolved redirect: {url} -> {resolved}")
         url = resolved
     if is_youtube(url):
-        info = _extract_youtube_kord(url)
-        log(f"kord YouTube formats={len(info['formats'])}")
+        info = _extract_youtube_xalman(url)
+        log(f"xalman YouTube formats={len(info['formats'])}")
         return info
     t = time.time()
     # كوكيز يوتيوب قد تكون غير صالحة أو تغيّر استجابة SoundCloud؛ لا نرسلها

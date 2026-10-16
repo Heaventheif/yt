@@ -32,7 +32,7 @@ ENV PATH="/opt/venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
 
 WORKDIR /app
-COPY *.py kord_bridge.js start.sh ./
+COPY *.py xalman_bridge.js start.sh ./
 COPY static ./static
 RUN chmod +x start.sh
 USER app
